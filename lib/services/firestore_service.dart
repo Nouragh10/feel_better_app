@@ -399,7 +399,7 @@ class FirestoreService {
         'moods': {},
         'items': {},
         'suggestions': {},
-        'completed': {fromUid: false, toUid: false},
+        'completed': {},
       });
     }
 
@@ -418,47 +418,48 @@ class FirestoreService {
     });
   }
 
-  /// Submit your check-in for today and attempt streak update.
+  /// Submit your check-in for a specific day (defaults to local day if not provided).
+  /// FIX: All reads happen before writes (Firestore requirement), then we update.
   Future<void> submitStreakCheckin({
     required String uid,
     required String friendUid,
     required String mood,
     required List<String> items,
     required String suggestion,
+    String? dayKeyOverride,
   }) async {
     final pairRef = _pairRef(uid, friendUid);
 
     final offsetMinutes = DateTime.now().timeZoneOffset.inMinutes;
-    final dayKey = _dayKeyWithOffset(Duration(minutes: offsetMinutes));
+    final dayKey = dayKeyOverride ?? _dayKeyWithOffset(Duration(minutes: offsetMinutes));
     final sessionRef = pairRef.collection('sessions').doc(dayKey);
 
     await _db.runTransaction((tx) async {
+      // ----- READS FIRST -----
+      final pairSnap = await tx.get(pairRef);
       final sessionSnap = await tx.get(sessionRef);
-      if (!sessionSnap.exists) {
-        tx.set(sessionRef, {
-          'dayKey': dayKey,
-          'tzOffsetMinutes': offsetMinutes,
-          'startedAt': FieldValue.serverTimestamp(),
-          'expiresAt': Timestamp.fromDate(
-            DateTime.now().toUtc().add(const Duration(hours: 26))),
-          'moods': {},
-          'items': {},
-          'suggestions': {},
-          'completed': {},
-        });
-      }
-      final data = (sessionSnap.data() ?? {});
-      final moods = Map<String, dynamic>.from(data['moods'] ?? {});
-      final itemsMap = Map<String, dynamic>.from(data['items'] ?? {});
-      final suggestions = Map<String, dynamic>.from(data['suggestions'] ?? {});
-      final completed = Map<String, dynamic>.from(data['completed'] ?? {});
 
+      // Prepare session state (existing or new)
+      final Map<String, dynamic> baseSession = sessionSnap.data() ?? {};
+      final moods = Map<String, dynamic>.from(baseSession['moods'] ?? {});
+      final itemsMap = Map<String, dynamic>.from(baseSession['items'] ?? {});
+      final suggestions = Map<String, dynamic>.from(baseSession['suggestions'] ?? {});
+      final completed = Map<String, dynamic>.from(baseSession['completed'] ?? {});
+
+      // Apply this user's completion
       moods[uid] = mood;
       itemsMap[uid] = items;
       suggestions[uid] = suggestion;
       completed[uid] = true;
 
+      // ----- WRITES -----
+      // Upsert session
       tx.set(sessionRef, {
+        'dayKey': dayKey,
+        'tzOffsetMinutes': offsetMinutes,
+        'startedAt': baseSession['startedAt'] ?? FieldValue.serverTimestamp(),
+        'expiresAt': baseSession['expiresAt'] ??
+            Timestamp.fromDate(DateTime.now().toUtc().add(const Duration(hours: 26))),
         'moods': moods,
         'items': itemsMap,
         'suggestions': suggestions,
@@ -466,13 +467,10 @@ class FirestoreService {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      // If both completed, update streak counters atomically
-      final bothDone = (completed[uid] == true) &&
-          (completed[friendUid] == true);
-
+      // If both completed, update streak counters atomically on the pair doc.
+      final bothDone = (completed[uid] == true) && (completed[friendUid] == true);
       if (bothDone) {
-        final pairSnap2 = await tx.get(pairRef);
-        final pd = pairSnap2.data() ?? {};
+        final pd = pairSnap.data() ?? {};
         final lastDayKey = pd['lastDayKey'] as String?;
         final currentStreak = (pd['currentStreak'] as int?) ?? 0;
         final longestStreak = (pd['longestStreak'] as int?) ?? 0;
@@ -480,26 +478,19 @@ class FirestoreService {
         int nextStreak;
         if (lastDayKey == null) {
           nextStreak = 1;
+        } else if (lastDayKey == dayKey) {
+          nextStreak = currentStreak; // already counted today
         } else {
           final prev = DateTime.parse(lastDayKey);
           final cur = DateTime.parse(dayKey);
           final isConsecutive = cur.difference(prev).inDays == 1;
-          final isSameDay = lastDayKey == dayKey;
-          if (isSameDay) {
-            nextStreak = currentStreak; // already counted today
-          } else if (isConsecutive) {
-            nextStreak = currentStreak + 1;
-          } else {
-            nextStreak = 1;
-          }
+          nextStreak = isConsecutive ? currentStreak + 1 : 1;
         }
 
         tx.set(pairRef, {
           'lastDayKey': dayKey,
           'currentStreak': nextStreak,
-          'longestStreak': (nextStreak > longestStreak)
-              ? nextStreak
-              : longestStreak,
+          'longestStreak': nextStreak > longestStreak ? nextStreak : longestStreak,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }

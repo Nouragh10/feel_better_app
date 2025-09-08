@@ -4,10 +4,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
-import '../widgets/friends_shares_feed.dart';
+import 'package:intl/intl.dart';
 
+import '../widgets/friends_shares_feed.dart';
+import '../widgets/streak_chip.dart';
+import '../widgets/action_timer.dart';
 import '../services/firestore_service.dart';
-import '../widgets/streak_chip.dart'; // <-- ADDED
+import '../services/openai_service.dart';
 
 class FriendsScreen extends StatefulWidget {
   const FriendsScreen({super.key});
@@ -18,6 +21,7 @@ class FriendsScreen extends StatefulWidget {
 
 class _FriendsScreenState extends State<FriendsScreen> {
   final _fs = FirestoreService();
+  final _db = FirebaseFirestore.instance;
 
   final _myUsernameCtrl = TextEditingController();
   final _addUsernameCtrl = TextEditingController();
@@ -30,6 +34,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
   String? _authErrorMsg;
   bool _initializing = true;
 
+  static const _apiKey = String.fromEnvironment('OPENAI_API_KEY');
+
   @override
   void initState() {
     super.initState();
@@ -38,7 +44,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   Future<void> _initIdentity() async {
     String? uid;
-    // 1) Try Firebase Anonymous Auth
     try {
       final auth = FirebaseAuth.instance;
       if (auth.currentUser == null) {
@@ -51,7 +56,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
       _authErrorMsg = e.toString();
     }
 
-    // 2) Persistent local UID fallback (DEV)
     if (uid == null) {
       try {
         final sp = await SharedPreferences.getInstance();
@@ -62,7 +66,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
         }
         _usingLocalUid = true;
       } catch (_) {
-        // 3) Last-resort in-memory uid (session only)
         uid = const Uuid().v4();
         _usingLocalUid = true;
       }
@@ -70,7 +73,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
     _uid = uid;
 
-    // Load any profile
     if (_uid != null) {
       try {
         final snap = await _fs.getUser(_uid!);
@@ -232,19 +234,82 @@ class _FriendsScreenState extends State<FriendsScreen> {
     }
   }
 
-  // Simple input helper for streak invite acceptance
-  Future<String?> _askFor(BuildContext ctx, String label) async {
-    final c = TextEditingController();
-    return showDialog<String?>(
-      context: ctx,
-      builder: (dCtx) => AlertDialog(
-        title: Text(label),
-        content: TextField(controller: c, autofocus: true),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dCtx, null), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dCtx, c.text.trim()), child: const Text('OK')),
-        ],
-      ),
+  // --------- helpers for dayKey/pair ----------
+  String _pairId(String a, String b) {
+    final x = [a, b]..sort();
+    return '${x[0]}__${x[1]}';
+  }
+
+  String _todayDayKeyWithOffset() {
+    final offsetMinutes = DateTime.now().timeZoneOffset.inMinutes;
+    final nowLocalAsUtc =
+        DateTime.now().toUtc().add(Duration(minutes: offsetMinutes));
+    return DateFormat('yyyy-MM-dd').format(nowLocalAsUtc);
+  }
+
+  Future<String> _getSuggestion(String mood, List<String> items) async {
+    return OpenAIService.suggest(
+      apiKey: _apiKey.isEmpty ? null : _apiKey,
+      mood: mood,
+      items: items,
+    );
+  }
+
+  /// Suggestion + timer; saves completion ONLY after timer finishes.
+  Future<void> _runSuggestionAndTimer({
+    required String friendUid,
+    required String mood,
+    required List<String> items,
+    required String dayKey, // <-- pass the shared key
+  }) async {
+    final suggestion = await _getSuggestion(mood, items);
+
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.verified_rounded),
+                  const SizedBox(width: 8),
+                  Text('Today’s suggestion',
+                      style: Theme.of(ctx).textTheme.titleMedium),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(suggestion),
+              const SizedBox(height: 12),
+              ActionTimer(
+                initialSeconds: 60,
+                options: const [60, 120, 300],
+                onComplete: () async {
+                  await _fs.submitStreakCheckin(
+                    uid: _uid!,
+                    friendUid: friendUid,
+                    mood: mood,
+                    items: items,
+                    suggestion: suggestion,
+                    dayKeyOverride: dayKey, // <-- shared session key
+                  );
+                  if (!mounted) return;
+                  Navigator.of(ctx).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Nice work — check-in saved')),
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -393,30 +458,81 @@ class _FriendsScreenState extends State<FriendsScreen> {
                               onPressed: () => _remove(friendUid),
                               child: const Text('Cancel'));
                         } else {
+                          // status == accepted
                           trailing = Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              // Streak chip + start streak
-                              StreakChip(myUid: _uid!, friendUid: friendUid, fs: _fs),
+                              // streak chip
+                              StreakChip(
+                                  myUid: _uid!, friendUid: friendUid, fs: _fs),
                               const SizedBox(width: 6),
+
+                              // Start streak (invite first; prompt only after friend accepts)
                               IconButton(
                                 tooltip: 'Start streak',
-                                icon: const Icon(Icons.local_fire_department_outlined),
+                                icon: const Icon(
+                                    Icons.local_fire_department_outlined),
                                 onPressed: () async {
+                                  final pairId = _pairId(_uid!, friendUid);
+                                  final dayKey = _todayDayKeyWithOffset();
+                                  final pairRef =
+                                      _db.collection('streak_pairs').doc(pairId);
+                                  final sessionRef = pairRef
+                                      .collection('sessions')
+                                      .doc(dayKey);
+
+                                  // create session + send invite (idempotent)
+                                  await _fs.ensureStreakPair(_uid!, friendUid);
                                   await _fs.startStreakSessionAndInvite(
                                     fromUid: _uid!,
                                     toUid: friendUid,
                                     note: 'Join me for today’s nudge?',
-                                    tzOffsetMinutes: DateTime.now().timeZoneOffset.inMinutes,
+                                    tzOffsetMinutes: DateTime.now()
+                                        .timeZoneOffset
+                                        .inMinutes,
                                   );
-                                  if (!mounted) return;
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Streak invite sent')),
+
+                                  // check if friend accepted
+                                  final snap = await sessionRef.get();
+                                  final acceptedBy = Map<String, dynamic>.from(
+                                      (snap.data() ?? {})['acceptedBy'] ?? {});
+                                  final friendAccepted =
+                                      acceptedBy[friendUid] == true;
+
+                                  if (!friendAccepted) {
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                            'Invite sent — you’ll be prompted after your friend accepts.'),
+                                      ),
+                                    );
+                                    return;
+                                  }
+
+                                  // Friend accepted → now prompt me
+                                  final mood = await _askFor(
+                                      context, 'Your mood (1–3 words)');
+                                  if (mood == null || mood.isEmpty) return;
+                                  final itemsCsv = await _askFor(context,
+                                      'Nearby items (comma separated)');
+                                  if (itemsCsv == null) return;
+                                  final items = itemsCsv
+                                      .split(',')
+                                      .map((s) => s.trim())
+                                      .where((s) => s.isNotEmpty)
+                                      .toList();
+
+                                  await _runSuggestionAndTimer(
+                                    friendUid: friendUid,
+                                    mood: mood,
+                                    items: items,
+                                    dayKey: dayKey, // shared key
                                   );
                                 },
                               ),
 
-                              // Existing actions
+                              // ping / remove
                               IconButton(
                                 tooltip: 'PING',
                                 onPressed: () => _ping(friendUid),
@@ -447,7 +563,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             ),
           ),
 
-          // ---- Friends’ feed (shares) ----
+          // ---- Friends’ feed
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.only(top: 8, left: 16, right: 16),
@@ -523,7 +639,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
             ),
           ),
 
-          // Inbox (includes streak_invite handling)
+          // ---- Inbox (invitee flow)
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.only(top: 8, left: 16, right: 16),
@@ -556,6 +672,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                     if (type == 'streak_invite') {
                       final fromUid = data['fromUid'] as String? ?? '';
                       final note = data['note'] as String? ?? '';
+                      final pairId = data['pairId'] as String?;
+                      final inviteDayKey = data['dayKey'] as String?;
 
                       return ListTile(
                         leading: const Icon(Icons.local_fire_department),
@@ -564,18 +682,40 @@ class _FriendsScreenState extends State<FriendsScreen> {
                           future: _getUser(fromUid),
                           builder: (ctx, userSnap) {
                             final uname =
-                                userSnap.data?['username'] as String? ?? 'friend';
+                                userSnap.data?['username'] as String? ??
+                                    'friend';
                             final base = 'From @$uname';
                             return Text(note.isEmpty ? base : '$base • $note');
                           },
                         ),
                         trailing: FilledButton(
                           onPressed: () async {
-                            final mood =
-                                await _askFor(context, 'Your mood (1–3 words)');
+                            // mark acceptance BEFORE prompting
+                            try {
+                              // Find this block inside the Inbox "streak_invite" handler BEFORE prompting:
+                              final pid = pairId ?? _pairId(_uid!, fromUid);
+                              final dk = inviteDayKey ?? _todayDayKeyWithOffset();
+                              final sessionRef = _db
+                                  .collection('streak_pairs')
+                                  .doc(pid)
+                                  .collection('sessions')
+                                  .doc(dk);
+
+                              // REPLACE the old set({... 'acceptedBy': {_uid!: true} ...})
+                              // with this dotted-path merge, so we only set our key:
+                              await sessionRef.set({
+                                'acceptedBy.${_uid!}': true,
+                                'updatedAt': FieldValue.serverTimestamp(),
+                              }, SetOptions(merge: true));
+
+                            } catch (_) {}
+
+                            // prompt → suggestion → timer → save (using invite's dayKey)
+                            final mood = await _askFor(
+                                context, 'Your mood (1–3 words)');
                             if (mood == null || mood.isEmpty) return;
-                            final itemsCsv = await _askFor(
-                                context, 'Nearby items (comma separated)');
+                            final itemsCsv = await _askFor(context,
+                                'Nearby items (comma separated)');
                             if (itemsCsv == null) return;
                             final items = itemsCsv
                                 .split(',')
@@ -583,16 +723,13 @@ class _FriendsScreenState extends State<FriendsScreen> {
                                 .where((s) => s.isNotEmpty)
                                 .toList();
 
-                            // For now, simple placeholder suggestion.
-                            final suggestion = '2-min grounding together';
-
-                            await _fs.submitStreakCheckin(
-                              uid: _uid!,
+                            await _runSuggestionAndTimer(
                               friendUid: fromUid,
                               mood: mood,
                               items: items,
-                              suggestion: suggestion,
+                              dayKey: inviteDayKey ?? _todayDayKeyWithOffset(),
                             );
+
                             await _fs.markPingRead(
                                 recipientUid: _uid!, pingId: d.id);
 
@@ -637,6 +774,26 @@ class _FriendsScreenState extends State<FriendsScreen> {
               },
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  // Simple input helper
+  Future<String?> _askFor(BuildContext ctx, String label) async {
+    final c = TextEditingController();
+    return showDialog<String?>(
+      context: ctx,
+      builder: (dCtx) => AlertDialog(
+        title: Text(label),
+        content: TextField(controller: c, autofocus: true),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(dCtx, null),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(dCtx, c.text.trim()),
+              child: const Text('OK')),
         ],
       ),
     );
