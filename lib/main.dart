@@ -1,4 +1,4 @@
-// lib/main.dart
+// PATH: lib/main.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 
@@ -9,15 +9,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'widgets/ghost_mode_button.dart';
 import 'widgets/friends_shares_feed.dart';
-
-
-
 import 'firebase_options.dart';
 import 'services/openai_service.dart';
 import 'services/firestore_service.dart';
 import 'screens/friends_screen.dart';
 import 'screens/settings_screen.dart' show ghostMode; // your existing ValueNotifier
-import 'widgets/action_timer.dart'; // <-- NEW
+import 'widgets/action_timer.dart';
+import 'screens/profile_screen.dart'; // Profile screen with Google sign-in
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,7 +61,6 @@ class SuggestionScreen extends StatefulWidget {
 
   @override
   State<SuggestionScreen> createState() => _SuggestionScreenState();
-
 }
 
 class _SuggestionScreenState extends State<SuggestionScreen> {
@@ -194,6 +191,23 @@ class _SuggestionScreenState extends State<SuggestionScreen> {
     }
   }
 
+  // ---- NEW: when the timer finishes, update the user's personal daily streak
+  Future<void> _onActionTimerComplete() async {
+    final uid = await _getUid();
+    try {
+      await _fs.updateUserDailyStreakOnActionComplete(uid: uid);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nice job — daily streak updated!')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Couldn’t update streak: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -202,15 +216,23 @@ class _SuggestionScreenState extends State<SuggestionScreen> {
       backgroundColor: const Color(0xFFF6FBF9),
       appBar: AppBar(
         title: const Text('Feel Better'),
-        
         actions: [
-          const GhostModeButton(compact: true), // <-- added toggle
+          const GhostModeButton(compact: true), // toggle
           IconButton(
             tooltip: 'Friends & Pings',
             icon: const Icon(Icons.group_add_rounded),
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const FriendsScreen()),
+              );
+            },
+          ),
+          IconButton(
+            tooltip: 'My Profile',
+            icon: const Icon(Icons.person_rounded),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const ProfileScreen()),
               );
             },
           ),
@@ -302,10 +324,11 @@ class _SuggestionScreenState extends State<SuggestionScreen> {
 
                         const SizedBox(height: 16),
 
-                        // Timer widget (separate file)
-                        const ActionTimer(
+                        // Timer widget (calls daily streak update on complete)
+                        ActionTimer(
                           initialSeconds: 60,
-                          options: [60, 120, 300],
+                          options: const [60, 120, 300],
+                          onComplete: _onActionTimerComplete,
                         ),
 
                         const SizedBox(height: 16),
