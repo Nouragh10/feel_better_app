@@ -1,8 +1,11 @@
 // PATH: lib/screens/profile_screen.dart
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../services/firestore_service.dart';
 
@@ -20,6 +23,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   bool _loading = true;
   bool _saving = false;
+  bool _uploadingAvatar = false;
+
+  // local override so the new image appears instantly
+  String? _localAvatarUrl;
 
   @override
   void initState() {
@@ -73,9 +80,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         uid: u.uid,
         displayName: display,
         username: username,
-        photoUrl: u.photoURL,
+        photoUrl: _localAvatarUrl ?? u.photoURL,
         providerIds: u.providerData.map((p) => p.providerId).toList(),
-        email: u.email,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context)
@@ -113,7 +119,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
       }
 
-      // Upsert user doc after sign-in
       final u = FirebaseAuth.instance.currentUser!;
       await _fs.upsertUser(
         uid: u.uid,
@@ -121,7 +126,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         username: _suggestUsername(u.email),
         photoUrl: u.photoURL,
         providerIds: u.providerData.map((p) => p.providerId).toList(),
-        email: u.email,
       );
       await _load();
     } catch (e) {
@@ -138,8 +142,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await FirebaseAuth.instance.signOut();
       _displayCtrl.clear();
       _usernameCtrl.clear();
+      _localAvatarUrl = null;
       if (!mounted) return;
-      setState(() {}); // refresh UI
+      setState(() {});
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Signed out')));
     } catch (e) {
@@ -149,15 +154,76 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Future<void> _pickAndUploadAvatar() async {
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sign in to set a profile photo')),
+      );
+      return;
+    }
+
+    setState(() => _uploadingAvatar = true);
+    try {
+      // 1) Pick image
+      final picker = ImagePicker();
+      final XFile? file = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 768,
+        maxHeight: 768,
+        imageQuality: 85,
+      );
+      if (file == null) {
+        setState(() => _uploadingAvatar = false);
+        return;
+      }
+
+      // 2) Read bytes + guess content type
+      final Uint8List bytes = await file.readAsBytes();
+      String ct = 'image/jpeg';
+      final lower = (file.name).toLowerCase();
+      if (lower.endsWith('.png')) ct = 'image/png';
+      if (lower.endsWith('.webp')) ct = 'image/webp';
+      final ext = lower.split('.').last;
+
+      // 3) Upload to Storage at avatars/{uid}/avatar.<ext>
+      final path = 'avatars/${u.uid}/avatar.$ext';
+      final ref = FirebaseStorage.instance.ref().child(path);
+      await ref.putData(bytes, SettableMetadata(contentType: ct));
+
+      // 4) Get URL
+      final url = await ref.getDownloadURL();
+
+      // 5) Update Auth photoURL and user doc (so StreamBuilder picks it up)
+      await u.updatePhotoURL(url);
+      await FirebaseFirestore.instance.collection('users').doc(u.uid).set({
+        'photoUrl': url,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      await FirebaseAuth.instance.currentUser!.reload();
+
+      // 6) Update local state so it appears immediately
+      _localAvatarUrl = url;
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Profile photo updated')));
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Upload failed: $e')));
+    } finally {
+      if (mounted) setState(() => _uploadingAvatar = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final u = FirebaseAuth.instance.currentUser;
-    final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('My Profile'),
-      ),
+      appBar: AppBar(title: const Text('My Profile')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Padding(
@@ -177,41 +243,76 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ],
                       ),
                     )
-                  : ListView(
-                      children: [
-                        Row(
+                  : StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(u.uid)
+                          .snapshots(),
+                      builder: (ctx, snap) {
+                        final data = snap.data?.data() ?? const {};
+                        final display =
+                            (data['displayName'] as String?)?.trim().isNotEmpty == true
+                                ? (data['displayName'] as String)
+                                : (u.displayName ?? 'Anonymous');
+                        final uname = (data['username'] as String?) ?? '';
+                        final photoUrl = _localAvatarUrl ??
+                            (data['photoUrl'] as String?) ??
+                            u.photoURL;
+                        final daily = (data['dailyCurrentStreak'] as int?) ?? 0;
+
+                        return ListView(
                           children: [
-                            CircleAvatar(
-                              radius: 28,
-                              backgroundImage:
-                                  (u.photoURL != null) ? NetworkImage(u.photoURL!) : null,
-                              child: (u.photoURL == null)
-                                  ? Text(
-                                      (u.displayName ?? 'A')[0].toUpperCase(),
-                                      style: const TextStyle(
-                                          fontWeight: FontWeight.w800,
-                                          fontSize: 18),
-                                    )
-                                  : null,
-                            ),
-                            const SizedBox(width: 12),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                // Avatar with edit overlay
+                                Stack(
+                                  alignment: Alignment.bottomRight,
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 36,
+                                      backgroundImage: (photoUrl != null)
+                                          ? NetworkImage(photoUrl)
+                                          : null,
+                                      child: (photoUrl == null)
+                                          ? Text(
+                                              (display.isNotEmpty
+                                                      ? display[0]
+                                                      : 'A')
+                                                  .toUpperCase(),
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.w800,
+                                                fontSize: 20,
+                                              ),
+                                            )
+                                          : null,
+                                    ),
+                                    Positioned(
+                                      right: -4,
+                                      bottom: -4,
+                                      child: IconButton.filledTonal(
+                                        visualDensity: VisualDensity.compact,
+                                        tooltip: 'Change photo',
+                                        onPressed: _uploadingAvatar
+                                            ? null
+                                            : _pickAndUploadAvatar,
+                                        icon: _uploadingAvatar
+                                            ? const SizedBox(
+                                                width: 16,
+                                                height: 16,
+                                                child: CircularProgressIndicator(
+                                                    strokeWidth: 2),
+                                              )
+                                            : const Icon(Icons.edit),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(width: 12),
 
-                            // ---- Name + daily streak chip + email (live via stream)
-                            Expanded(
-                              child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                                stream: FirebaseFirestore.instance
-                                    .collection('users')
-                                    .doc(u.uid)
-                                    .snapshots(),
-                                builder: (ctx, snap) {
-                                  final data = snap.data?.data() ?? const {};
-                                  final display =
-                                      (data['displayName'] as String?)?.trim().isNotEmpty == true
-                                          ? (data['displayName'] as String)
-                                          : (u.displayName ?? 'Anonymous');
-                                  final daily = (data['dailyCurrentStreak'] as int?) ?? 0;
-
-                                  return Column(
+                                // Name + streak + email/provider
+                                Expanded(
+                                  child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Row(
@@ -219,13 +320,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                           Flexible(
                                             child: Text(
                                               display,
-                                              style: Theme.of(context).textTheme.titleMedium,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleMedium,
                                               overflow: TextOverflow.ellipsis,
                                             ),
                                           ),
                                           const SizedBox(width: 8),
                                           InputChip(
-                                            avatar: const Icon(Icons.local_fire_department, size: 18),
+                                            avatar: const Icon(
+                                              Icons.local_fire_department,
+                                              size: 18,
+                                            ),
                                             label: Text('$daily'),
                                             onPressed: () {},
                                           ),
@@ -233,62 +339,72 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       ),
                                       const SizedBox(height: 4),
                                       Text(u.email ?? 'No email',
-                                          style: Theme.of(context).textTheme.bodyMedium),
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodyMedium),
                                       const SizedBox(height: 2),
                                       Text(
                                         'Signed in with ${u.providerData.isNotEmpty ? u.providerData.first.providerId : 'unknown'}',
-                                        style: Theme.of(context).textTheme.labelSmall,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall,
                                       ),
                                     ],
-                                  );
-                                },
+                                  ),
+                                ),
+
+                                TextButton.icon(
+                                  onPressed: _signOut,
+                                  icon: const Icon(Icons.logout_rounded),
+                                  label: const Text('Sign out'),
+                                ),
+                              ],
+                            ),
+
+                            const SizedBox(height: 16),
+
+                            TextField(
+                              controller: _displayCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Display name',
                               ),
                             ),
-
-                            TextButton.icon(
-                              onPressed: _signOut,
-                              icon: const Icon(Icons.logout_rounded),
-                              label: const Text('Sign out'),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _usernameCtrl,
+                              decoration: const InputDecoration(
+                                labelText: 'Username',
+                                hintText: 'e.g., noura',
+                              ),
                             ),
+                            const SizedBox(height: 16),
+
+                            FilledButton.icon(
+                              onPressed: _saving ? null : _save,
+                              icon: _saving
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.save_rounded),
+                              label:
+                                  Text(_saving ? 'Saving…' : 'Save profile'),
+                            ),
+
+                            const SizedBox(height: 24),
+                            Text('UID: ${u.uid}',
+                                style:
+                                    Theme.of(context).textTheme.labelSmall),
+                            if (uname.isNotEmpty)
+                              Text('Username: @$uname',
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .labelSmall),
                           ],
-                        ),
-                        const SizedBox(height: 16),
-
-                        TextField(
-                          controller: _displayCtrl,
-                          decoration: const InputDecoration(
-                            labelText: 'Display name',
-                          ),
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: _usernameCtrl,
-                          decoration: const InputDecoration(
-                            labelText: 'Username',
-                            hintText: 'e.g., noura',
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-
-                        FilledButton.icon(
-                          onPressed: _saving ? null : _save,
-                          icon: _saving
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Icon(Icons.save_rounded),
-                          label: Text(_saving ? 'Saving…' : 'Save profile'),
-                        ),
-
-                        const SizedBox(height: 24),
-                        Divider(color: cs.outlineVariant),
-                        const SizedBox(height: 8),
-
-                        Text('UID: ${u.uid}',
-                            style: Theme.of(context).textTheme.labelSmall),
-                      ],
+                        );
+                      },
                     ),
             ),
     );
