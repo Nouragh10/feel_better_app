@@ -626,7 +626,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
                               leading:
                                   const Icon(Icons.check_circle_rounded),
                               title: Text(who),
-                              subtitle: Text(summary),
+                              // Show the full compact summary without truncating lines.
+                              subtitle: Text(_compactSummary(summary, max: 240)),
                               trailing: Text(_friendlyTime(ts)),
                             );
                           },
@@ -806,5 +807,22 @@ class _FriendsScreenState extends State<FriendsScreen> {
     if (diff.inMinutes < 60) return '${diff.inMinutes}m';
     if (diff.inHours < 24) return '${diff.inHours}h';
     return '${diff.inDays}d';
+  }
+
+  /// Shorten "felt X and was recommended: Y" → "X → Y", collapse spaces, clip.
+  String _compactSummary(String s, {int max = 90}) {
+    var t = s.trim();
+    final m = RegExp(
+      r'^\s*felt\s+(.+?)\s+and\s+was\s+recommended:\s+(.+)$',
+      caseSensitive: false,
+    ).firstMatch(t);
+    if (m != null) {
+      final mood = m.group(1)!.trim();
+      final rec = m.group(2)!.trim();
+      t = '$mood → $rec';
+    }
+    t = t.replaceAll(RegExp(r'\s+'), ' ');
+    if (t.length > max) t = '${t.substring(0, max - 1)}…';
+    return t;
   }
 }

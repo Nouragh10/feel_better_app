@@ -1,4 +1,3 @@
-// PATH: lib/widgets/friends_shares_feed.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -75,6 +74,23 @@ class _FriendsSharesFeedState extends State<FriendsSharesFeed> {
     if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
     if (diff.inHours < 24) return '${diff.inHours}h ago';
     return '${diff.inDays}d ago';
+  }
+
+  /// Turn "felt X and was recommended: Y" -> "X → Y", collapse spaces, and clip.
+  String _compactSummary(String s, {int max = 90}) {
+    var t = s.trim();
+    final m = RegExp(
+      r'^\s*felt\s+(.+?)\s+and\s+was\s+recommended:\s+(.+)$',
+      caseSensitive: false,
+    ).firstMatch(t);
+    if (m != null) {
+      final mood = m.group(1)!.trim();
+      final rec = m.group(2)!.trim();
+      t = '$mood → $rec';
+    }
+    t = t.replaceAll(RegExp(r'\s+'), ' ');
+    if (t.length > max) t = '${t.substring(0, max - 1)}…';
+    return t;
   }
 
   @override
@@ -174,8 +190,7 @@ class _FriendsSharesFeedState extends State<FriendsSharesFeed> {
                         final createdAt = d['createdAt'] as Timestamp?;
                         final name = _nameFor(authorId);
 
-                        // Display: "Noura felt ... and was recommended: ..."
-                        final text = '$name $summary';
+                        final text = _compactSummary(summary);
 
                         return ListTile(
                           dense: false,
@@ -187,8 +202,13 @@ class _FriendsSharesFeedState extends State<FriendsSharesFeed> {
                               style: const TextStyle(fontWeight: FontWeight.w700),
                             ),
                           ),
-                          title: Text(text),
-                          subtitle: Text(_relativeTime(createdAt)),
+                          title: Text(name),
+                          subtitle: Text(
+                            text,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Text(_relativeTime(createdAt)),
                         );
                       },
                     );
