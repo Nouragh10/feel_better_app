@@ -6,11 +6,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 
-import '../widgets/friends_shares_feed.dart';
 import '../widgets/streak_chip.dart';
-import '../widgets/action_timer.dart';
 import '../services/firestore_service.dart';
 import '../services/openai_service.dart';
+import '../widgets/action_timer.dart';
+
+// Brand colors
+const kPrimaryCyan = Color(0xFF06B6D4);
+const kSecondaryPurple = Color(0xFF8B5CF6);
+const kAccentCoral = Color(0xFFFF6B9D);
+
+const kBgLightTop = Color(0xFFF0F9FF);
+const kBgLightMid = Color(0xFFFAFAFF);
+const kBgLightEnd = Color(0xFFFFFFFF);
+
+const kBgDarkTop = Color(0xFF0B1120);
+const kBgDarkMid = Color(0xFF0F172A);
+const kBgDarkEnd = Color(0xFF1E293B);
+
+const kGlassLight = Color(0xFFFEFEFE);
+const kGlassDark = Color(0xFF1A2332);
 
 class FriendsScreen extends StatefulWidget {
   const FriendsScreen({super.key});
@@ -19,7 +34,7 @@ class FriendsScreen extends StatefulWidget {
   State<FriendsScreen> createState() => _FriendsScreenState();
 }
 
-class _FriendsScreenState extends State<FriendsScreen> {
+class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProviderStateMixin {
   final _fs = FirestoreService();
   final _db = FirebaseFirestore.instance;
 
@@ -29,17 +44,29 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   final Map<String, Map<String, dynamic>?> _userCache = {};
 
-  String? _uid; // Firebase uid or local fallback
-  bool _usingLocalUid = false; // shows banner
+  String? _uid;
+  bool _usingLocalUid = false;
   String? _authErrorMsg;
   bool _initializing = true;
+
+  late TabController _tabController;
 
   static const _apiKey = String.fromEnvironment('OPENAI_API_KEY');
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     _initIdentity();
+  }
+
+  @override
+  void dispose() {
+    _myUsernameCtrl.dispose();
+    _addUsernameCtrl.dispose();
+    _pingNoteCtrl.dispose();
+    _tabController.dispose();
+    super.dispose();
   }
 
   Future<void> _initIdentity() async {
@@ -86,14 +113,6 @@ class _FriendsScreenState extends State<FriendsScreen> {
     if (mounted) setState(() => _initializing = false);
   }
 
-  @override
-  void dispose() {
-    _myUsernameCtrl.dispose();
-    _addUsernameCtrl.dispose();
-    _pingNoteCtrl.dispose();
-    super.dispose();
-  }
-
   Future<Map<String, dynamic>?> _getUser(String uid) async {
     if (_userCache.containsKey(uid)) return _userCache[uid];
     final snap = await _fs.getUser(uid);
@@ -102,28 +121,30 @@ class _FriendsScreenState extends State<FriendsScreen> {
     return data;
   }
 
+  void _showSnackBar(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
+  }
+
   Future<void> _saveMyUsername() async {
     if (_uid == null) return;
     final u = _myUsernameCtrl.text.trim();
     if (u.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pick a username first')),
-      );
+      _showSnackBar('Pick a username first');
       return;
     }
     try {
-      await _fs.upsertUser(
-        uid: _uid!,
-        displayName: 'Anonymous',
-        username: u,
-      );
+      await _fs.upsertUser(uid: _uid!, displayName: 'Anonymous', username: u);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Username set to @$u')));
+      _showSnackBar('Username set to @$u');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not save: $e')));
+      _showSnackBar('Could not save: $e');
     }
   }
 
@@ -131,35 +152,28 @@ class _FriendsScreenState extends State<FriendsScreen> {
     if (_uid == null) return;
     final username = _addUsernameCtrl.text.trim();
     if (username.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a username')),
-      );
+      _showSnackBar('Enter a username');
       return;
     }
 
     try {
       final toUid = await _fs.getUidByUsername(username);
       if (toUid == null) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('No user “$username”.')));
+        _showSnackBar('No user "$username".');
         return;
       }
       if (toUid == _uid) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('You cannot add yourself')),
-        );
+        _showSnackBar('You cannot add yourself');
         return;
       }
 
       await _fs.sendFriendRequest(fromUid: _uid!, toUid: toUid);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Request sent to @$username')));
+      _showSnackBar('Request sent to @$username');
       _addUsernameCtrl.clear();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not send: $e')));
+      _showSnackBar('Could not send: $e');
     }
   }
 
@@ -168,12 +182,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
     try {
       await _fs.acceptFriendship(uid: _uid!, friendUid: friendUid);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Accepted')));
+      _showSnackBar('Accepted');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      _showSnackBar('Error: $e');
     }
   }
 
@@ -182,12 +194,10 @@ class _FriendsScreenState extends State<FriendsScreen> {
     try {
       await _fs.removeFriend(uid: _uid!, friendUid: friendUid);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Removed')));
+      _showSnackBar('Removed');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Error: $e')));
+      _showSnackBar('Error: $e');
     }
   }
 
@@ -207,34 +217,23 @@ class _FriendsScreenState extends State<FriendsScreen> {
           ),
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, null),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, _pingNoteCtrl.text.trim()),
-              child: const Text('Send')),
+          TextButton(onPressed: () => Navigator.pop(ctx, null), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, _pingNoteCtrl.text.trim()), child: const Text('Send')),
         ],
       ),
     );
 
     if (!mounted) return;
     try {
-      await _fs.sendPing(
-        fromUid: _uid!,
-        toUid: friendUid,
-        note: (note ?? '').isEmpty ? null : note,
-      );
+      await _fs.sendPing(fromUid: _uid!, toUid: friendUid, note: (note ?? '').isEmpty ? null : note);
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('PING sent')));
+      _showSnackBar('PING sent');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not ping: $e')));
+      _showSnackBar('Could not ping: $e');
     }
   }
 
-  // --------- helpers for dayKey/pair ----------
   String _pairId(String a, String b) {
     final x = [a, b]..sort();
     return '${x[0]}__${x[1]}';
@@ -242,8 +241,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
 
   String _todayDayKeyWithOffset() {
     final offsetMinutes = DateTime.now().timeZoneOffset.inMinutes;
-    final nowLocalAsUtc =
-        DateTime.now().toUtc().add(Duration(minutes: offsetMinutes));
+    final nowLocalAsUtc = DateTime.now().toUtc().add(Duration(minutes: offsetMinutes));
     return DateFormat('yyyy-MM-dd').format(nowLocalAsUtc);
   }
 
@@ -255,12 +253,11 @@ class _FriendsScreenState extends State<FriendsScreen> {
     );
   }
 
-  /// Suggestion + timer; saves completion ONLY after timer finishes.
   Future<void> _runSuggestionAndTimer({
     required String friendUid,
     required String mood,
     required List<String> items,
-    required String dayKey, // <-- pass the shared key
+    required String dayKey,
   }) async {
     final suggestion = await _getSuggestion(mood, items);
 
@@ -269,24 +266,45 @@ class _FriendsScreenState extends State<FriendsScreen> {
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
+      backgroundColor: Colors.transparent,
       builder: (ctx) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+        final cs = Theme.of(context).colorScheme;
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return Container(
+          margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [kGlassDark.withOpacity(0.95), kGlassDark.withOpacity(0.9)]
+                  : [kGlassLight.withOpacity(0.98), kGlassLight.withOpacity(0.95)],
+            ),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: cs.primary.withOpacity(0.3), width: 2),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 children: [
-                  const Icon(Icons.verified_rounded),
-                  const SizedBox(width: 8),
-                  Text('Today’s suggestion',
-                      style: Theme.of(ctx).textTheme.titleMedium),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: [cs.primary, cs.secondary]),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.verified_rounded, color: Colors.white, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Text('Today\'s suggestion', style: Theme.of(ctx).textTheme.titleLarge),
                 ],
               ),
-              const SizedBox(height: 8),
-              Text(suggestion),
-              const SizedBox(height: 12),
+              const SizedBox(height: 16),
+              Text(suggestion, style: Theme.of(ctx).textTheme.bodyLarge),
+              const SizedBox(height: 20),
               ActionTimer(
                 initialSeconds: 60,
                 options: const [60, 120, 300],
@@ -297,13 +315,11 @@ class _FriendsScreenState extends State<FriendsScreen> {
                     mood: mood,
                     items: items,
                     suggestion: suggestion,
-                    dayKeyOverride: dayKey, // <-- shared session key
+                    dayKeyOverride: dayKey,
                   );
                   if (!mounted) return;
                   Navigator.of(ctx).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Nice work — check-in saved')),
-                  );
+                  _showSnackBar('Nice work — check-in saved');
                 },
               ),
             ],
@@ -316,6 +332,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     if (_initializing) {
       return Scaffold(
@@ -331,7 +348,7 @@ class _FriendsScreenState extends State<FriendsScreen> {
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Text(
-              'Couldn’t create a user.\n${_authErrorMsg ?? ''}',
+              'Could not create a user.\n${_authErrorMsg ?? ''}',
               textAlign: TextAlign.center,
             ),
           ),
@@ -340,439 +357,509 @@ class _FriendsScreenState extends State<FriendsScreen> {
     }
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('Friends & Pings'),
-        backgroundColor: cs.surface,
-        surfaceTintColor: cs.surfaceTint,
+        backgroundColor: Colors.transparent,
+        bottom: TabBar(
+          controller: _tabController,
+          tabs: const [
+            Tab(icon: Icon(Icons.people_rounded), text: 'Friends'),
+            Tab(icon: Icon(Icons.rss_feed_rounded), text: 'Feed'),
+            Tab(icon: Icon(Icons.inbox_rounded), text: 'Inbox'),
+          ],
+        ),
       ),
-      body: Column(
-        children: [
-          if (_usingLocalUid)
-            MaterialBanner(
-              content: const Text(
-                'Using local test ID (Firebase Auth not available). You can add friends & ping now. '
-                'Switch to real Auth later.',
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? [kBgDarkTop, kBgDarkMid, kBgDarkEnd]
+                : [kBgLightTop, kBgLightMid, kBgLightEnd],
+          ),
+        ),
+        child: SafeArea(
+          child: Column(
+            children: [
+              if (_usingLocalUid)
+                Container(
+                  margin: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: cs.primaryContainer,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: cs.onPrimaryContainer),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Using local test ID. Switch to real Auth later.',
+                          style: TextStyle(color: cs.onPrimaryContainer, fontSize: 13),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              _buildUsernameSection(cs, isDark),
+              const SizedBox(height: 16),
+              Expanded(
+                child: TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _buildFriendsTab(cs, isDark),
+                    _buildFeedTab(cs, isDark),
+                    _buildInboxTab(cs, isDark),
+                  ],
+                ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () =>
-                      ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
-                  child: const Text('OK'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUsernameSection(ColorScheme cs, bool isDark) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [kGlassDark.withOpacity(0.7), kGlassDark.withOpacity(0.5)]
+              : [kGlassLight.withOpacity(0.9), kGlassLight.withOpacity(0.7)],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: cs.primary.withOpacity(0.3), width: 2),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _myUsernameCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'My username',
+                    hintText: 'e.g., noura',
+                    prefixIcon: Icon(Icons.alternate_email_rounded, color: cs.primary),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  ),
                 ),
-              ],
-            ),
-          Padding(
-            padding: const EdgeInsets.all(16),
+              ),
+              const SizedBox(width: 12),
+              FilledButton(
+                onPressed: _saveMyUsername,
+                style: FilledButton.styleFrom(
+                  backgroundColor: cs.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                ),
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _addUsernameCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Add friend by username',
+                    hintText: 'e.g., friendname',
+                    prefixIcon: Icon(Icons.person_add_rounded, color: cs.secondary),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              FilledButton.icon(
+                onPressed: _sendRequest,
+                style: FilledButton.styleFrom(
+                  backgroundColor: cs.secondary,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                ),
+                icon: const Icon(Icons.person_add_alt_1_rounded),
+                label: const Text('Add'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFriendsTab(ColorScheme cs, bool isDark) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _fs.friendshipsStream(_uid!),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return Center(
             child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                // My username
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _myUsernameCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'My username',
-                          hintText: 'e.g., noura',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                        onPressed: _saveMyUsername, child: const Text('Save')),
-                  ],
-                ),
+                Icon(Icons.people_outline, size: 64, color: cs.onSurface.withOpacity(0.3)),
                 const SizedBox(height: 16),
+                Text(
+                  'No friends yet',
+                  style: TextStyle(fontSize: 18, color: cs.onSurface.withOpacity(0.6)),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Add a friend to get started',
+                  style: TextStyle(fontSize: 14, color: cs.onSurface.withOpacity(0.5)),
+                ),
+              ],
+            ),
+          );
+        }
 
-                // Add by username
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _addUsernameCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Add friend by username',
-                          hintText: 'e.g., friendname',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton.icon(
-                      onPressed: _sendRequest,
-                      icon: const Icon(Icons.person_add_alt_1_rounded),
-                      label: const Text('Add'),
-                    ),
-                  ],
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 12),
+          itemBuilder: (context, i) {
+            final d = docs[i];
+            final friendUid = d.id;
+            final status = (d.data()['status'] as String?) ?? 'pending';
+
+            return FutureBuilder<Map<String, dynamic>?>(
+              future: _getUser(friendUid),
+              builder: (context, userSnap) {
+                final u = userSnap.data;
+                final name = (u?['displayName'] as String?) ?? 'Unknown';
+                final uname = (u?['username'] as String?) ?? 'unknown';
+
+                return _buildFriendCard(
+                  cs: cs,
+                  isDark: isDark,
+                  name: name,
+                  username: uname,
+                  friendUid: friendUid,
+                  status: status,
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildFriendCard({
+    required ColorScheme cs,
+    required bool isDark,
+    required String name,
+    required String username,
+    required String friendUid,
+    required String status,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isDark ? kGlassDark.withOpacity(0.4) : kGlassLight.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.5),
+          width: 1.5,
+        ),
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 24,
+            backgroundColor: cs.primaryContainer,
+            child: Text(
+              name.isNotEmpty ? name[0].toUpperCase() : '?',
+              style: TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
+                color: cs.onPrimaryContainer,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '@$username • $status',
+                  style: TextStyle(fontSize: 13, color: cs.onSurface.withOpacity(0.6)),
                 ),
               ],
             ),
           ),
-          const Divider(height: 1),
+          _buildFriendActions(cs, friendUid, status),
+        ],
+      ),
+    );
+  }
 
-          // Friendships
-          Expanded(
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: _fs.friendshipsStream(_uid!),
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final docs = snap.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return const Center(child: Text('No friends yet.'));
-                }
+  Widget _buildFriendActions(ColorScheme cs, String friendUid, String status) {
+    if (status == 'incoming') {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            onPressed: () => _accept(friendUid),
+            icon: const Icon(Icons.check_circle_rounded, color: Colors.green),
+            tooltip: 'Accept',
+          ),
+          IconButton(
+            onPressed: () => _remove(friendUid),
+            icon: Icon(Icons.cancel_rounded, color: cs.error),
+            tooltip: 'Decline',
+          ),
+        ],
+      );
+    } else if (status == 'pending') {
+      return TextButton(
+        onPressed: () => _remove(friendUid),
+        child: const Text('Cancel'),
+      );
+    } else {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          StreakChip(myUid: _uid!, friendUid: friendUid, fs: _fs),
+          IconButton(
+            tooltip: 'Start streak',
+            icon: const Icon(Icons.local_fire_department_outlined),
+            onPressed: () => _startStreak(friendUid),
+          ),
+          IconButton(
+            tooltip: 'PING',
+            onPressed: () => _ping(friendUid),
+            icon: const Icon(Icons.notifications_active_rounded),
+          ),
+        ],
+      );
+    }
+  }
 
-                return ListView.separated(
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, i) {
-                    final d = docs[i];
-                    final friendUid = d.id;
-                    final status =
-                        (d.data()['status'] as String?) ?? 'pending';
+  Future<void> _startStreak(String friendUid) async {
+    final pairId = _pairId(_uid!, friendUid);
+    final dayKey = _todayDayKeyWithOffset();
+    final sessionRef = _db.collection('streak_pairs').doc(pairId).collection('sessions').doc(dayKey);
 
-                    return FutureBuilder<Map<String, dynamic>?>(
-                      future: _getUser(friendUid),
-                      builder: (context, userSnap) {
-                        final u = userSnap.data;
-                        final name =
-                            (u?['displayName'] as String?) ?? 'Unknown';
-                        final uname =
-                            (u?['username'] as String?) ?? 'unknown';
+    await _fs.ensureStreakPair(_uid!, friendUid);
+    await _fs.startStreakSessionAndInvite(
+      fromUid: _uid!,
+      toUid: friendUid,
+      note: 'Join me for today\'s nudge?',
+      tzOffsetMinutes: DateTime.now().timeZoneOffset.inMinutes,
+    );
 
-                        Widget trailing;
-                        if (status == 'incoming') {
-                          trailing = Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              TextButton(
-                                  onPressed: () => _accept(friendUid),
-                                  child: const Text('Accept')),
-                              TextButton(
-                                  onPressed: () => _remove(friendUid),
-                                  child: const Text('Decline')),
-                            ],
-                          );
-                        } else if (status == 'pending') {
-                          trailing = TextButton(
-                              onPressed: () => _remove(friendUid),
-                              child: const Text('Cancel'));
-                        } else {
-                          // status == accepted
-                          trailing = Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // streak chip
-                              StreakChip(
-                                  myUid: _uid!, friendUid: friendUid, fs: _fs),
-                              const SizedBox(width: 6),
+    final snap = await sessionRef.get();
+    final acceptedBy = Map<String, dynamic>.from((snap.data() ?? {})['acceptedBy'] ?? {});
+    final friendAccepted = acceptedBy[friendUid] == true;
 
-                              // Start streak (invite first; prompt only after friend accepts)
-                              IconButton(
-                                tooltip: 'Start streak',
-                                icon: const Icon(
-                                    Icons.local_fire_department_outlined),
-                                onPressed: () async {
-                                  final pairId = _pairId(_uid!, friendUid);
-                                  final dayKey = _todayDayKeyWithOffset();
-                                  final pairRef =
-                                      _db.collection('streak_pairs').doc(pairId);
-                                  final sessionRef = pairRef
-                                      .collection('sessions')
-                                      .doc(dayKey);
+    if (!friendAccepted) {
+      if (!mounted) return;
+      _showSnackBar('Invite sent — you will be prompted after your friend accepts.');
+      return;
+    }
 
-                                  // create session + send invite (idempotent)
-                                  await _fs.ensureStreakPair(_uid!, friendUid);
-                                  await _fs.startStreakSessionAndInvite(
-                                    fromUid: _uid!,
-                                    toUid: friendUid,
-                                    note: 'Join me for today’s nudge?',
-                                    tzOffsetMinutes: DateTime.now()
-                                        .timeZoneOffset
-                                        .inMinutes,
-                                  );
+    final mood = await _askFor(context, 'Your mood (1–3 words)');
+    if (mood == null || mood.isEmpty) return;
+    final itemsCsv = await _askFor(context, 'Nearby items (comma separated)');
+    if (itemsCsv == null) return;
+    final items = itemsCsv.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
 
-                                  // check if friend accepted
-                                  final snap = await sessionRef.get();
-                                  final acceptedBy = Map<String, dynamic>.from(
-                                      (snap.data() ?? {})['acceptedBy'] ?? {});
-                                  final friendAccepted =
-                                      acceptedBy[friendUid] == true;
+    await _runSuggestionAndTimer(friendUid: friendUid, mood: mood, items: items, dayKey: dayKey);
+  }
 
-                                  if (!friendAccepted) {
-                                    if (!mounted) return;
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                            'Invite sent — you’ll be prompted after your friend accepts.'),
-                                      ),
-                                    );
-                                    return;
-                                  }
+  Widget _buildFeedTab(ColorScheme cs, bool isDark) {
+    return FutureBuilder<List<String>>(
+      future: _fs.listFriendIds(_uid!),
+      builder: (context, idsSnap) {
+        if (idsSnap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final ids = idsSnap.data ?? const <String>[];
+        if (ids.isEmpty) {
+          return Center(
+            child: Text('Add friends to see their shares', style: TextStyle(color: cs.onSurface.withOpacity(0.6))),
+          );
+        }
+        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _fs.publicFeedForFriends(friendIds: ids, limit: 50),
+          builder: (context, feedSnap) {
+            if (feedSnap.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            final docs = feedSnap.data?.docs ?? [];
+            if (docs.isEmpty) {
+              return Center(child: Text('No shares yet', style: TextStyle(color: cs.onSurface.withOpacity(0.6))));
+            }
+            return ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: docs.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (ctx, i) {
+                final d = docs[i].data();
+                final authorId = d['authorId'] as String? ?? '';
+                final summary = d['publicSummary'] as String? ?? '';
+                final ts = (d['createdAt'] as Timestamp?)?.toDate();
 
-                                  // Friend accepted → now prompt me
-                                  final mood = await _askFor(
-                                      context, 'Your mood (1–3 words)');
-                                  if (mood == null || mood.isEmpty) return;
-                                  final itemsCsv = await _askFor(context,
-                                      'Nearby items (comma separated)');
-                                  if (itemsCsv == null) return;
-                                  final items = itemsCsv
-                                      .split(',')
-                                      .map((s) => s.trim())
-                                      .where((s) => s.isNotEmpty)
-                                      .toList();
+                return FutureBuilder<Map<String, dynamic>?>(
+                  future: _getUser(authorId),
+                  builder: (ctx, userSnap) {
+                    final u = userSnap.data;
+                    final name = (u?['displayName'] as String?) ?? '';
+                    final who = name.isNotEmpty ? name : 'Someone';
 
-                                  await _runSuggestionAndTimer(
-                                    friendUid: friendUid,
-                                    mood: mood,
-                                    items: items,
-                                    dayKey: dayKey, // shared key
-                                  );
-                                },
-                              ),
-
-                              // ping / remove
-                              IconButton(
-                                tooltip: 'PING',
-                                onPressed: () => _ping(friendUid),
-                                icon: const Icon(
-                                    Icons.notifications_active_rounded),
-                              ),
-                              TextButton(
-                                  onPressed: () => _remove(friendUid),
-                                  child: const Text('Remove')),
-                            ],
-                          );
-                        }
-
-                        return ListTile(
-                          leading: CircleAvatar(
-                              child: Text(name.isNotEmpty
-                                  ? name[0].toUpperCase()
-                                  : '?')),
-                          title: Text(name),
-                          subtitle: Text('@$uname • $status'),
-                          trailing: trailing,
-                        );
-                      },
+                    return Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isDark ? kGlassDark.withOpacity(0.4) : kGlassLight.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.5),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.check_circle_rounded, color: cs.primary, size: 20),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(who, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                const SizedBox(height: 4),
+                                Text(_compactSummary(summary, max: 240)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(_friendlyTime(ts), style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5))),
+                        ],
+                      ),
                     );
                   },
                 );
               },
-            ),
-          ),
+            );
+          },
+        );
+      },
+    );
+  }
 
-          // ---- Friends’ feed
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.only(top: 8, left: 16, right: 16),
-            child: Row(
+  Widget _buildInboxTab(ColorScheme cs, bool isDark) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _fs.pingsInboxStream(_uid!),
+      builder: (context, snap) {
+        final docs = snap.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Text('Friends’ shares',
-                    style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(width: 8),
-                const Icon(Icons.rss_feed_rounded, size: 18),
+                Icon(Icons.inbox_outlined, size: 64, color: cs.onSurface.withOpacity(0.3)),
+                const SizedBox(height: 16),
+                Text('No pings yet', style: TextStyle(fontSize: 18, color: cs.onSurface.withOpacity(0.6))),
               ],
             ),
-          ),
-          SizedBox(
-            height: 220,
-            child: FutureBuilder<List<String>>(
-              future: _fs.listFriendIds(_uid!),
-              builder: (context, idsSnap) {
-                if (idsSnap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final ids = idsSnap.data ?? const <String>[];
-                if (ids.isEmpty) {
-                  return const Center(
-                      child: Text('Add friends to see their shares.'));
-                }
-                return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream:
-                      _fs.publicFeedForFriends(friendIds: ids, limit: 50),
-                  builder: (context, feedSnap) {
-                    if (feedSnap.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    final docs = feedSnap.data?.docs ?? [];
-                    if (docs.isEmpty) {
-                      return const Center(child: Text('No shares yet.'));
-                    }
-                    return ListView.separated(
-                      itemCount: docs.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (ctx, i) {
-                        final d = docs[i].data();
-                        final authorId = d['authorId'] as String? ?? '';
-                        final summary =
-                            d['publicSummary'] as String? ?? '';
-                        final ts =
-                            (d['createdAt'] as Timestamp?)?.toDate();
+          );
+        }
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 12),
+          itemBuilder: (_, i) {
+            final d = docs[i];
+            final data = d.data();
+            final type = data['type'] as String? ?? 'ping';
 
-                        return FutureBuilder<Map<String, dynamic>?>(
-                          future: _getUser(authorId),
-                          builder: (ctx, userSnap) {
-                            final u = userSnap.data;
-                            final name = (u?['displayName'] as String?) ?? '';
-                            final uname =
-                                (u?['username'] as String?) ?? '';
-                            final who = name.isNotEmpty
-                                ? name
-                                : (uname.isNotEmpty ? '@$uname' : 'Someone');
+            if (type == 'streak_invite') {
+              return _buildStreakInviteCard(cs, isDark, d, data);
+            }
 
-                            return ListTile(
-                              leading:
-                                  const Icon(Icons.check_circle_rounded),
-                              title: Text(who),
-                              // Show the full compact summary without truncating lines.
-                              subtitle: Text(_compactSummary(summary, max: 240)),
-                              trailing: Text(_friendlyTime(ts)),
-                            );
-                          },
-                        );
-                      },
+            return _buildPingCard(cs, isDark, d, data);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildStreakInviteCard(ColorScheme cs, bool isDark, QueryDocumentSnapshot d, Map<String, dynamic> data) {
+    final fromUid = data['fromUid'] as String? ?? '';
+    final note = data['note'] as String? ?? '';
+    final pairId = data['pairId'] as String?;
+    final inviteDayKey = data['dayKey'] as String?;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [kAccentCoral.withOpacity(0.15), kSecondaryPurple.withOpacity(0.15)],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: kAccentCoral.withOpacity(0.5), width: 2),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [kAccentCoral, cs.secondary]),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.local_fire_department, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FutureBuilder<Map<String, dynamic>?>(
+                  future: _getUser(fromUid),
+                  builder: (ctx, userSnap) {
+                    final uname = userSnap.data?['username'] as String? ?? 'friend';
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Streak invite', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                        const SizedBox(height: 2),
+                        Text('From @$uname', style: TextStyle(fontSize: 13, color: cs.onSurface.withOpacity(0.7))),
+                        if (note.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(note, style: TextStyle(fontSize: 13, color: cs.onSurface.withOpacity(0.6))),
+                        ],
+                      ],
                     );
                   },
-                );
-              },
-            ),
+                ),
+              ),
+            ],
           ),
-
-          // ---- Inbox (invitee flow)
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.only(top: 8, left: 16, right: 16),
-            child: Row(
-              children: [
-                Text('Inbox', style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(width: 8),
-                const Icon(Icons.inbox_rounded, size: 18),
-              ],
-            ),
-          ),
+          const SizedBox(height: 12),
           SizedBox(
-            height: 180,
-            child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: _fs.pingsInboxStream(_uid!),
-              builder: (context, snap) {
-                final docs = snap.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return const Center(child: Text('No pings yet.'));
-                }
-                return ListView.separated(
-                  itemCount: docs.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final d = docs[i];
-                    final data = d.data();
-                    final type = data['type'] as String? ?? 'ping';
-                    final ts = (data['createdAt'] as Timestamp?)?.toDate();
-
-                    if (type == 'streak_invite') {
-                      final fromUid = data['fromUid'] as String? ?? '';
-                      final note = data['note'] as String? ?? '';
-                      final pairId = data['pairId'] as String?;
-                      final inviteDayKey = data['dayKey'] as String?;
-
-                      return ListTile(
-                        leading: const Icon(Icons.local_fire_department),
-                        title: const Text('Streak invite'),
-                        subtitle: FutureBuilder<Map<String, dynamic>?>(
-                          future: _getUser(fromUid),
-                          builder: (ctx, userSnap) {
-                            final uname =
-                                userSnap.data?['username'] as String? ??
-                                    'friend';
-                            final base = 'From @$uname';
-                            return Text(note.isEmpty ? base : '$base • $note');
-                          },
-                        ),
-                        trailing: FilledButton(
-                          onPressed: () async {
-                            // mark acceptance BEFORE prompting
-                            try {
-                              // Find this block inside the Inbox "streak_invite" handler BEFORE prompting:
-                              final pid = pairId ?? _pairId(_uid!, fromUid);
-                              final dk = inviteDayKey ?? _todayDayKeyWithOffset();
-                              final sessionRef = _db
-                                  .collection('streak_pairs')
-                                  .doc(pid)
-                                  .collection('sessions')
-                                  .doc(dk);
-
-                              // REPLACE the old set({... 'acceptedBy': {_uid!: true} ...})
-                              // with this dotted-path merge, so we only set our key:
-                              await sessionRef.set({
-                                'acceptedBy.${_uid!}': true,
-                                'updatedAt': FieldValue.serverTimestamp(),
-                              }, SetOptions(merge: true));
-
-                            } catch (_) {}
-
-                            // prompt → suggestion → timer → save (using invite's dayKey)
-                            final mood = await _askFor(
-                                context, 'Your mood (1–3 words)');
-                            if (mood == null || mood.isEmpty) return;
-                            final itemsCsv = await _askFor(context,
-                                'Nearby items (comma separated)');
-                            if (itemsCsv == null) return;
-                            final items = itemsCsv
-                                .split(',')
-                                .map((s) => s.trim())
-                                .where((s) => s.isNotEmpty)
-                                .toList();
-
-                            await _runSuggestionAndTimer(
-                              friendUid: fromUid,
-                              mood: mood,
-                              items: items,
-                              dayKey: inviteDayKey ?? _todayDayKeyWithOffset(),
-                            );
-
-                            await _fs.markPingRead(
-                                recipientUid: _uid!, pingId: d.id);
-
-                            if (!mounted) return;
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text('Joined today’s streak')),
-                            );
-                          },
-                          child: const Text('Join'),
-                        ),
-                      );
-                    }
-
-                    // Default PING tile
-                    final fromUid = data['fromUid'] as String? ?? '';
-                    final note = data['note'] as String? ?? '';
-                    final read = data['read'] as bool? ?? false;
-
-                    return FutureBuilder<Map<String, dynamic>?>(
-                      future: _getUser(fromUid),
-                      builder: (ctx, userSnap) {
-                        final u = userSnap.data;
-                        final name = u?['displayName'] ?? 'Someone';
-                        final uname = u?['username'] ?? '';
-                        return ListTile(
-                          leading: Icon(read
-                              ? Icons.mark_email_read
-                              : Icons.mark_email_unread),
-                          title: Text(
-                              'PING from $name${uname.isNotEmpty ? ' (@$uname)' : ''}'),
-                          subtitle:
-                              Text(note.isEmpty ? 'Tap to mark read' : note),
-                          trailing: Text(_friendlyTime(ts)),
-                          onTap: () => _fs.markPingRead(
-                              recipientUid: _uid!, pingId: d.id),
-                        );
-                      },
-                    );
-                  },
-                );
-              },
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: () => _acceptStreakInvite(fromUid, d.id, pairId, inviteDayKey),
+              style: FilledButton.styleFrom(backgroundColor: cs.secondary),
+              child: const Text('Join streak'),
             ),
           ),
         ],
@@ -780,7 +867,108 @@ class _FriendsScreenState extends State<FriendsScreen> {
     );
   }
 
-  // Simple input helper
+  Future<void> _acceptStreakInvite(String fromUid, String pingId, String? pairId, String? inviteDayKey) async {
+    try {
+      final pid = pairId ?? _pairId(_uid!, fromUid);
+      final dk = inviteDayKey ?? _todayDayKeyWithOffset();
+      final sessionRef = _db.collection('streak_pairs').doc(pid).collection('sessions').doc(dk);
+
+      await sessionRef.set({
+        'acceptedBy.${_uid!}': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {}
+
+    final mood = await _askFor(context, 'Your mood (1–3 words)');
+    if (mood == null || mood.isEmpty) return;
+    final itemsCsv = await _askFor(context, 'Nearby items (comma separated)');
+    if (itemsCsv == null) return;
+    final items = itemsCsv.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+
+    await _runSuggestionAndTimer(
+      friendUid: fromUid,
+      mood: mood,
+      items: items,
+      dayKey: inviteDayKey ?? _todayDayKeyWithOffset(),
+    );
+
+    await _fs.markPingRead(recipientUid: _uid!, pingId: pingId);
+
+    if (!mounted) return;
+    _showSnackBar('Joined today\'s streak');
+  }
+
+  Widget _buildPingCard(ColorScheme cs, bool isDark, QueryDocumentSnapshot d, Map<String, dynamic> data) {
+    final fromUid = data['fromUid'] as String? ?? '';
+    final note = data['note'] as String? ?? '';
+    final read = data['read'] as bool? ?? false;
+    final ts = (data['createdAt'] as Timestamp?)?.toDate();
+
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: _getUser(fromUid),
+      builder: (ctx, userSnap) {
+        final u = userSnap.data;
+        final name = u?['displayName'] ?? 'Someone';
+        final uname = u?['username'] ?? '';
+        return InkWell(
+          onTap: () => _fs.markPingRead(recipientUid: _uid!, pingId: d.id),
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: read
+                  ? (isDark ? kGlassDark.withOpacity(0.3) : kGlassLight.withOpacity(0.5))
+                  : (isDark ? kGlassDark.withOpacity(0.5) : kGlassLight.withOpacity(0.8)),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: read
+                    ? (isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.3))
+                    : cs.primary.withOpacity(0.4),
+                width: read ? 1 : 2,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: read ? cs.surfaceVariant : cs.primaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    read ? Icons.mark_email_read : Icons.mark_email_unread,
+                    color: read ? cs.onSurfaceVariant : cs.onPrimaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'PING from $name${uname.isNotEmpty ? ' (@$uname)' : ''}',
+                        style: TextStyle(fontWeight: read ? FontWeight.w500 : FontWeight.w700, fontSize: 15),
+                      ),
+                      if (note.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(note, style: TextStyle(fontSize: 13, color: cs.onSurface.withOpacity(0.7))),
+                      ] else ...[
+                        const SizedBox(height: 4),
+                        Text('Tap to mark as read', style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5))),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(_friendlyTime(ts), style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5))),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<String?> _askFor(BuildContext ctx, String label) async {
     final c = TextEditingController();
     return showDialog<String?>(
@@ -789,12 +977,8 @@ class _FriendsScreenState extends State<FriendsScreen> {
         title: Text(label),
         content: TextField(controller: c, autofocus: true),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dCtx, null),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(dCtx, c.text.trim()),
-              child: const Text('OK')),
+          TextButton(onPressed: () => Navigator.pop(dCtx, null), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dCtx, c.text.trim()), child: const Text('OK')),
         ],
       ),
     );
@@ -809,13 +993,12 @@ class _FriendsScreenState extends State<FriendsScreen> {
     return '${diff.inDays}d';
   }
 
-  /// Shorten "felt X and was recommended: Y" → "X → Y", collapse spaces, clip.
   String _compactSummary(String s, {int max = 90}) {
     var t = s.trim();
     final m = RegExp(
-      r'^\s*felt\s+(.+?)\s+and\s+was\s+recommended:\s+(.+)$',
-      caseSensitive: false,
-    ).firstMatch(t);
+  r'^\s*felt\s+(.+?)\s+and\s+was\s+recommended:\s+(.+)$',
+  caseSensitive: false,
+).firstMatch(t);
     if (m != null) {
       final mood = m.group(1)!.trim();
       final rec = m.group(2)!.trim();
