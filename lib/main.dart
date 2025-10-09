@@ -7,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'firebase_options.dart';
 import 'services/openai_service.dart';
@@ -201,6 +202,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   bool _loading = false;
   bool _saving = false;
   String? _suggestion;
+  String? _extractedLink;
   bool _shareWithFriends = true;
   bool _shareWithProvider = false;
 
@@ -246,6 +248,67 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     return uid;
   }
 
+  String? _extractLinkFromSuggestion(String suggestion) {
+    final urlRegex = RegExp(
+      r'https?://[^\s\)]+',
+      caseSensitive: false,
+    );
+    final match = urlRegex.firstMatch(suggestion);
+    return match?.group(0);
+  }
+
+  String? _generateLinkForSuggestion(String suggestion, String mood, List<String> items) {
+    final s = suggestion.toLowerCase();
+    final m = mood.toLowerCase();
+    
+    if (s.contains('play') || s.contains('listen') || s.contains('song')) {
+      final songMatch = RegExp(r'"([^"]+)"').firstMatch(suggestion);
+      if (songMatch != null) {
+        final songName = songMatch.group(1)!;
+        return 'https://www.google.com/search?q=${Uri.encodeComponent(songName)}';
+      }
+      
+      final yourMatch = RegExp(r'your\s+(?:go-to\s+)?(\w+)').firstMatch(s);
+      if (yourMatch != null) {
+        if (m.contains('sad') || m.contains('low') || m.contains('down')) {
+          return 'https://www.google.com/search?q=${Uri.encodeComponent('uplifting happy song')}';
+        } else if (m.contains('anx') || m.contains('tense') || m.contains('panic')) {
+          return 'https://www.google.com/search?q=${Uri.encodeComponent('calming relaxing song')}';
+        }
+      }
+      
+      return 'https://www.google.com/search?q=${Uri.encodeComponent('feel good music')}';
+    }
+    
+    if (s.contains('watch')) {
+      return 'https://www.youtube.com/results?search_query=${Uri.encodeComponent('calming video 2 minutes')}';
+    }
+    
+    if (s.contains('recipe') || s.contains('snack')) {
+      return 'https://www.google.com/search?q=${Uri.encodeComponent('quick 5 minute snack recipe')}';
+    }
+    
+    return null;
+  }
+
+  String _cleanSuggestionText(String suggestion) {
+    var cleaned = suggestion;
+    cleaned = cleaned.replaceAll(
+      RegExp(r'[Ss]earch:\s*https?://[^\s]+', caseSensitive: false),
+      '',
+    );
+    cleaned = cleaned.replaceAll(
+      RegExp(r'https?://[^\s]+', caseSensitive: false),
+      '',
+    );
+    final trailingDash = RegExp(r'\s*-\s*$');
+    cleaned = cleaned.replaceAll(trailingDash, '');
+    final multiSpace = RegExp(r'\s+');
+    cleaned = cleaned.replaceAll(multiSpace, ' ');
+    cleaned = cleaned.trim();
+    return cleaned;
+  }
+
   Future<void> _getSuggestion() async {
     final mood = _moodController.text.trim();
     final items = _parseItems(_itemsController.text);
@@ -261,9 +324,12 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       return;
     }
 
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _extractedLink = null;
+    });
+    
     try {
-      // Get user preferences
       Map<String, String>? prefs;
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid != null) {
@@ -285,7 +351,19 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       );
 
       if (!mounted) return;
-      setState(() => _suggestion = result);
+      
+      var link = _extractLinkFromSuggestion(result);
+      
+      if (link == null) {
+        link = _generateLinkForSuggestion(result, mood, items);
+      }
+      
+      final cleanedSuggestion = _cleanSuggestionText(result);
+      
+      setState(() {
+        _suggestion = cleanedSuggestion;
+        _extractedLink = link;
+      });
       _fadeController.forward(from: 0);
     } on TimeoutException {
       if (!mounted) return;
@@ -295,6 +373,24 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       setState(() => _suggestion = 'Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _openLink() async {
+    if (_extractedLink == null) return;
+    
+    final uri = Uri.parse(_extractedLink!);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Could not open link'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
     }
   }
 
@@ -326,6 +422,17 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
           authorId: uid,
           publicSummary: 'felt $mood and was recommended: $suggestion',
         );
+        
+        try {
+          final userSnap = await _fs.getUser(uid);
+          final userData = userSnap.data();
+          final username = userData?['username'] as String? ?? 'Someone';
+          await _fs.notifyTrustedPerson(
+            fromUid: uid,
+            fromUsername: username,
+            summary: 'felt $mood and was recommended: $suggestion',
+          );
+        } catch (_) {}
       }
 
       if (!mounted) return;
@@ -555,7 +662,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
 
   Widget _buildResultCard({required bool isDark, required ColorScheme cs}) {
     return Container(
-      padding: const EdgeInsets.all(28),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
@@ -590,41 +697,60 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: [cs.primary, cs.secondary],
                   ),
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(Icons.lightbulb_rounded, color: Colors.white, size: 24),
+                child: const Icon(Icons.lightbulb_rounded, color: Colors.white, size: 20),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   'Your suggestion',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     color: cs.onSurface,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
               ),
             ],
           ),
 
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
 
           Text(
             _suggestion!,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-              fontSize: 17,
-              height: 1.6,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              fontSize: 15,
+              height: 1.5,
               color: cs.onSurface.withOpacity(0.9),
             ),
           ),
 
-          const SizedBox(height: 24),
-          Divider(color: cs.outline.withOpacity(0.2)),
+          if (_extractedLink != null) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: FilledButton.icon(
+                onPressed: _openLink,
+                style: FilledButton.styleFrom(
+                  backgroundColor: cs.tertiary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                ),
+                icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                label: const Text('Open link', style: TextStyle(fontSize: 14)),
+              ),
+            ),
+          ],
+
           const SizedBox(height: 20),
+          Divider(color: cs.outline.withOpacity(0.2), height: 1),
+          const SizedBox(height: 16),
 
           ActionTimer(
             initialSeconds: 60,
@@ -632,61 +758,68 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             onComplete: _onActionTimerComplete,
           ),
 
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
 
-          Wrap(
-            spacing: 16,
-            runSpacing: 12,
+          Row(
             children: [
-              _buildCheckOption(
-                cs: cs,
-                value: _shareWithFriends,
-                label: 'Share with friends',
-                icon: Icons.people_rounded,
-                onChanged: (v) => setState(() => _shareWithFriends = v ?? true),
+              Expanded(
+                child: _buildCompactCheckOption(
+                  cs: cs,
+                  value: _shareWithFriends,
+                  label: 'Friends',
+                  icon: Icons.people_rounded,
+                  onChanged: (v) => setState(() => _shareWithFriends = v ?? true),
+                ),
               ),
-              _buildCheckOption(
-                cs: cs,
-                value: _shareWithProvider,
-                label: 'Share with provider',
-                icon: Icons.medical_services_rounded,
-                onChanged: (v) => setState(() => _shareWithProvider = v ?? false),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildCompactCheckOption(
+                  cs: cs,
+                  value: _shareWithProvider,
+                  label: 'Provider',
+                  icon: Icons.medical_services_rounded,
+                  onChanged: (v) => setState(() => _shareWithProvider = v ?? false),
+                ),
               ),
             ],
           ),
 
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
 
           SizedBox(
             width: double.infinity,
-            height: 54,
+            height: 48,
             child: FilledButton.icon(
               onPressed: _saving ? null : _saveEntry,
               style: FilledButton.styleFrom(
                 backgroundColor: cs.secondary,
                 foregroundColor: cs.onSecondary,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
               ),
               icon: _saving
                   ? const SizedBox(
-                      width: 20,
-                      height: 20,
+                      width: 18,
+                      height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
-                  : const Icon(Icons.bookmark_rounded),
-              label: Text(_saving ? 'Saving...' : 'Save this moment'),
+                  : const Icon(Icons.bookmark_rounded, size: 20),
+              label: Text(
+                _saving ? 'Saving...' : 'Save this moment',
+                style: const TextStyle(fontSize: 15),
+              ),
             ),
           ),
 
           if (ghostMode.value) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Row(
               children: [
-                Icon(Icons.visibility_off_rounded, size: 14, color: cs.outline),
+                Icon(Icons.visibility_off_rounded, size: 13, color: cs.outline),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    'Ghost mode is on — nothing shared with friends',
-                    style: TextStyle(fontSize: 12, color: cs.outline),
+                    'Ghost mode on — not shared with friends',
+                    style: TextStyle(fontSize: 11, color: cs.outline),
                   ),
                 ),
               ],
@@ -697,7 +830,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     );
   }
 
-  Widget _buildCheckOption({
+  Widget _buildCompactCheckOption({
     required ColorScheme cs,
     required bool value,
     required String label,
@@ -707,34 +840,42 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     return InkWell(
       onTap: () => onChanged(!value),
       borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: value ? cs.primary.withOpacity(0.1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: value ? cs.primary : cs.outline.withOpacity(0.3),
+            width: 1.5,
+          ),
+        ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 24,
-              height: 24,
+              width: 20,
+              height: 20,
               decoration: BoxDecoration(
                 color: value ? cs.primary : Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
+                borderRadius: BorderRadius.circular(5),
                 border: Border.all(
                   color: value ? cs.primary : cs.outline.withOpacity(0.5),
                   width: 2,
                 ),
               ),
               child: value
-                  ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
+                  ? const Icon(Icons.check_rounded, size: 14, color: Colors.white)
                   : null,
             ),
-            const SizedBox(width: 10),
-            Icon(icon, size: 18, color: cs.onSurface.withOpacity(0.7)),
-            const SizedBox(width: 6),
+            const SizedBox(width: 8),
+            Icon(icon, size: 16, color: cs.onSurface.withOpacity(0.7)),
+            const SizedBox(width: 4),
             Text(
               label,
               style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
                 color: cs.onSurface.withOpacity(0.8),
               ),
             ),

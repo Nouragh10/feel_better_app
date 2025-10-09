@@ -28,7 +28,12 @@ environment:
 # the latest version available on pub.dev. To see which dependencies have newer
 # versions available, run `flutter pub outdated`.
 dependencies:
-  url_launcher: ^6.3.2
+
+
+
+
+
+  url_launcher: ^6.2.2
   flutter:
     sdk: flutter
 

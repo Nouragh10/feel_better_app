@@ -246,10 +246,23 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
   }
 
   Future<String> _getSuggestion(String mood, List<String> items) async {
+    Map<String, String>? prefs;
+    if (_uid != null) {
+      try {
+        final snap = await _fs.getUser(_uid!);
+        final data = snap.data();
+        prefs = (data?['personalPreferences'] as Map<String, dynamic>?)?.map(
+          (key, value) => MapEntry(key, value.toString()),
+        );
+      } catch (_) {}
+    }
+
     return OpenAIService.suggest(
       apiKey: _apiKey.isEmpty ? null : _apiKey,
       mood: mood,
       items: items,
+      uid: _uid,
+      userPreferences: prefs,
     );
   }
 
@@ -564,51 +577,115 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     required String friendUid,
     required String status,
   }) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: isDark ? kGlassDark.withOpacity(0.4) : kGlassLight.withOpacity(0.6),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.5),
-          width: 1.5,
-        ),
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 24,
-            backgroundColor: cs.primaryContainer,
-            child: Text(
-              name.isNotEmpty ? name[0].toUpperCase() : '?',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                fontSize: 18,
-                color: cs.onPrimaryContainer,
+    return FutureBuilder<bool>(
+      future: _isTrustedPerson(friendUid),
+      builder: (context, trustedSnap) {
+        final isTrusted = trustedSnap.data ?? false;
+        
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isDark ? kGlassDark.withOpacity(0.4) : kGlassLight.withOpacity(0.6),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: isTrusted 
+                  ? const Color(0xFFFF6B9D).withOpacity(0.5)
+                  : (isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.5)),
+              width: isTrusted ? 2 : 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 24,
+                    backgroundColor: cs.primaryContainer,
+                    child: Text(
+                      name.isNotEmpty ? name[0].toUpperCase() : '?',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 18,
+                        color: cs.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                  if (isTrusted)
+                    Positioned(
+                      right: -2,
+                      bottom: -2,
+                      child: TrustedPersonBadge(),
+                    ),
+                ],
               ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            name,
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (isTrusted) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFFFF6B9D), Color(0xFFFFB6C1)],
+                              ),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text(
+                              'Trusted',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '@$username • $status',
+                      style: TextStyle(fontSize: 13, color: cs.onSurface.withOpacity(0.6)),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  '@$username • $status',
-                  style: TextStyle(fontSize: 13, color: cs.onSurface.withOpacity(0.6)),
-                ),
-              ],
-            ),
+              ),
+              _buildFriendActions(cs, friendUid, status),
+            ],
           ),
-          _buildFriendActions(cs, friendUid, status),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  Future<bool> _isTrustedPerson(String friendUid) async {
+    if (_uid == null) return false;
+    
+    try {
+      final snap = await _fs.getUser(_uid!);
+      final data = snap.data();
+      final prefs = data?['personalPreferences'] as Map<String, dynamic>?;
+      final trustedUsername = prefs?['trustedPerson'] as String?;
+      
+      if (trustedUsername == null || trustedUsername.isEmpty) return false;
+      
+      final trustedUid = await _fs.getUidByUsername(trustedUsername);
+      return trustedUid == friendUid;
+    } catch (_) {
+      return false;
+    }
   }
 
   Widget _buildFriendActions(ColorScheme cs, String friendUid, String status) {
@@ -782,6 +859,7 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
             ),
           );
         }
+        
         return ListView.separated(
           padding: const EdgeInsets.all(16),
           itemCount: docs.length,
@@ -791,6 +869,10 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
             final data = d.data();
             final type = data['type'] as String? ?? 'ping';
 
+            if (type == 'trusted_person_notification') {
+              return _buildTrustedPersonNotificationCard(cs, isDark, d, data);
+            }
+            
             if (type == 'streak_invite') {
               return _buildStreakInviteCard(cs, isDark, d, data);
             }
@@ -799,6 +881,89 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
           },
         );
       },
+    );
+  }
+
+  Widget _buildTrustedPersonNotificationCard(
+    ColorScheme cs,
+    bool isDark,
+    QueryDocumentSnapshot d,
+    Map<String, dynamic> data,
+  ) {
+    final fromUid = data['fromUid'] as String? ?? '';
+    final fromUsername = data['fromUsername'] as String? ?? '';
+    final summary = data['summary'] as String? ?? '';
+    final read = data['read'] as bool? ?? false;
+    final ts = (data['createdAt'] as Timestamp?)?.toDate();
+
+    return InkWell(
+      onTap: () => _fs.markPingRead(recipientUid: _uid!, pingId: d.id),
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: read
+                ? [
+                    (isDark ? kGlassDark : kGlassLight).withOpacity(0.3),
+                    (isDark ? kGlassDark : kGlassLight).withOpacity(0.3),
+                  ]
+                : [
+                    const Color(0xFFFF6B9D).withOpacity(0.15),
+                    const Color(0xFFFFB6C1).withOpacity(0.15),
+                  ],
+          ),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: read
+                ? (isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.3))
+                : const Color(0xFFFF6B9D).withOpacity(0.4),
+            width: read ? 1 : 2,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFF6B9D), Color(0xFFFFB6C1)],
+                ),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.favorite_rounded, color: Colors.white, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '@$fromUsername shared a moment',
+                    style: TextStyle(
+                      fontWeight: read ? FontWeight.w500 : FontWeight.w700,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    _compactSummary(summary, max: 80),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: cs.onSurface.withOpacity(0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              _friendlyTime(ts),
+              style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -993,12 +1158,12 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     return '${diff.inDays}d';
   }
 
-  String _compactSummary(String s, {int max = 90}) {
+String _compactSummary(String s, {int max = 90}) {
     var t = s.trim();
     final m = RegExp(
-  r'^\s*felt\s+(.+?)\s+and\s+was\s+recommended:\s+(.+)$',
-  caseSensitive: false,
-).firstMatch(t);
+      r'^\s*felt\s+(.+?)\s+and\s+was\s+recommended:\s+(.+)$',
+      caseSensitive: false,
+    ).firstMatch(t);
     if (m != null) {
       final mood = m.group(1)!.trim();
       final rec = m.group(2)!.trim();
@@ -1007,5 +1172,30 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     t = t.replaceAll(RegExp(r'\s+'), ' ');
     if (t.length > max) t = '${t.substring(0, max - 1)}…';
     return t;
+  }
+}
+
+
+//TrustedPersonBadge widget
+class TrustedPersonBadge extends StatelessWidget {
+  const TrustedPersonBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFF6B9D), Color(0xFFFFB6C1)],
+        ),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+      ),
+      child: const Icon(
+        Icons.favorite,
+        color: Colors.white,
+        size: 12,
+      ),
+    );
   }
 }

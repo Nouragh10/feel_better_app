@@ -1,6 +1,7 @@
 // PATH: lib/screens/personalization_setup_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../services/firestore_service.dart';
 
 // Brand colors
@@ -74,10 +75,10 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
       'key': 'goToActivity',
     },
     {
-      'icon': Icons.contact_phone_rounded,
+      'icon': Icons.favorite_rounded,
       'title': 'Trusted person',
-      'hint': 'e.g., Mom, Best friend Sarah',
-      'description': 'Who do you reach out to when you need support?',
+      'hint': 'e.g., @glee',
+      'description': 'Who should be notified when you share moments? Enter their username.',
       'key': 'trustedPerson',
     },
     {
@@ -116,15 +117,89 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
       if (prefs != null) {
         for (int i = 0; i < _questions.length; i++) {
           final key = _questions[i]['key'] as String;
-          _controllers[i].text = prefs[key] as String? ?? '';
+          final value = prefs[key] as String? ?? '';
+          
+          // Add @ prefix for trusted person if not present
+          if (key == 'trustedPerson' && value.isNotEmpty && !value.startsWith('@')) {
+            _controllers[i].text = '@$value';
+          } else {
+            _controllers[i].text = value;
+          }
         }
       }
     } catch (_) {}
   }
 
+  Future<bool> _validateTrustedPerson(String username) async {
+    if (username.isEmpty) return true;
+    
+    final cleanUsername = username.startsWith('@') ? username.substring(1) : username;
+    
+    try {
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid == null) return false;
+      
+      final targetUid = await _fs.getUidByUsername(cleanUsername);
+      if (targetUid == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('User @$cleanUsername not found'),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+        }
+        return false;
+      }
+      
+      final friendDoc = await FirebaseFirestore.instance
+          .collection('friendships')
+          .doc(uid)
+          .collection('friends')
+          .doc(targetUid)
+          .get();
+      
+      if (!friendDoc.exists || friendDoc.data()?['status'] != 'accepted') {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('@$cleanUsername is not your friend yet. Add them first!'),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+        }
+        return false;
+      }
+      
+      return true;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error validating username: $e'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        );
+      }
+      return false;
+    }
+  }
+
   Future<void> _save() async {
     final u = FirebaseAuth.instance.currentUser;
     if (u == null) return;
+
+    final trustedPersonIndex = _questions.indexWhere((q) => q['key'] == 'trustedPerson');
+    if (trustedPersonIndex != -1) {
+      final trustedPersonValue = _controllers[trustedPersonIndex].text.trim();
+      if (trustedPersonValue.isNotEmpty) {
+        final isValid = await _validateTrustedPerson(trustedPersonValue);
+        if (!isValid) return;
+      }
+    }
 
     setState(() => _saving = true);
 
@@ -132,7 +207,12 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
       final prefs = <String, String>{};
       for (int i = 0; i < _questions.length; i++) {
         final key = _questions[i]['key'] as String;
-        final value = _controllers[i].text.trim();
+        var value = _controllers[i].text.trim();
+        
+        if (key == 'trustedPerson' && value.isNotEmpty) {
+          value = value.startsWith('@') ? value.substring(1) : value;
+        }
+        
         if (value.isNotEmpty) {
           prefs[key] = value;
         }
@@ -212,7 +292,6 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
         child: SafeArea(
           child: Column(
             children: [
-              // Progress indicator
               Padding(
                 padding: const EdgeInsets.all(24),
                 child: Column(
@@ -249,7 +328,6 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
                 ),
               ),
 
-              // Questions
               Expanded(
                 child: PageView.builder(
                   controller: _pageController,
@@ -266,12 +344,12 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
                       hint: q['hint'] as String,
                       description: q['description'] as String,
                       controller: _controllers[i],
+                      isTrustedPerson: q['key'] == 'trustedPerson',
                     );
                   },
                 ),
               ),
 
-              // Navigation buttons
               Padding(
                 padding: const EdgeInsets.all(24),
                 child: Row(
@@ -335,6 +413,7 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
     required String hint,
     required String description,
     required TextEditingController controller,
+    bool isTrustedPerson = false,
   }) {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -350,7 +429,9 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
           ),
           borderRadius: BorderRadius.circular(28),
           border: Border.all(
-            color: cs.primary.withOpacity(0.3),
+            color: isTrustedPerson 
+                ? const Color(0xFFFF6B9D).withOpacity(0.4)
+                : cs.primary.withOpacity(0.3),
             width: 2,
           ),
           boxShadow: [
@@ -358,25 +439,30 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
               blurRadius: 32,
               spreadRadius: -4,
               offset: const Offset(0, 12),
-              color: cs.primary.withOpacity(0.15),
+              color: isTrustedPerson
+                  ? const Color(0xFFFF6B9D).withOpacity(0.2)
+                  : cs.primary.withOpacity(0.15),
             ),
           ],
         ),
         child: Column(
           children: [
-            // Icon
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [cs.primary, cs.secondary],
+                  colors: isTrustedPerson
+                      ? [const Color(0xFFFF6B9D), const Color(0xFFFFB6C1)]
+                      : [cs.primary, cs.secondary],
                 ),
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
                     blurRadius: 20,
                     spreadRadius: 2,
-                    color: cs.primary.withOpacity(0.3),
+                    color: isTrustedPerson
+                        ? const Color(0xFFFF6B9D).withOpacity(0.3)
+                        : cs.primary.withOpacity(0.3),
                   ),
                 ],
               ),
@@ -385,7 +471,6 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
 
             const SizedBox(height: 24),
 
-            // Title
             Text(
               title,
               style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -397,7 +482,6 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
 
             const SizedBox(height: 12),
 
-            // Description
             Text(
               description,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -408,14 +492,13 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
 
             const SizedBox(height: 32),
 
-            // Input
             TextField(
               controller: controller,
               maxLines: 2,
               style: const TextStyle(fontSize: 16),
               decoration: InputDecoration(
                 hintText: hint,
-                prefixIcon: Icon(icon, color: cs.primary),
+                prefixIcon: Icon(icon, color: isTrustedPerson ? const Color(0xFFFF6B9D) : cs.primary),
                 filled: true,
                 fillColor: isDark
                     ? Colors.white.withOpacity(0.05)
@@ -425,14 +508,15 @@ class _PersonalizationSetupScreenState extends State<PersonalizationSetupScreen>
 
             const SizedBox(height: 16),
 
-            // Optional note
             Row(
               children: [
                 Icon(Icons.info_outline, size: 16, color: cs.onSurface.withOpacity(0.5)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'This helps us give you more personalized suggestions',
+                    isTrustedPerson
+                        ? 'They will be notified when you share moments and see a special badge'
+                        : 'This helps us give you more personalized suggestions',
                     style: TextStyle(
                       fontSize: 12,
                       color: cs.onSurface.withOpacity(0.5),
