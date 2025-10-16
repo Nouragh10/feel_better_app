@@ -5,6 +5,20 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 
+
+
+class CrisisDetectionResult {
+  final bool isCrisis;
+  final String? safetyMessage;
+  final List<String> hotlines;
+
+  CrisisDetectionResult({
+    required this.isCrisis,
+    this.safetyMessage,
+    this.hotlines = const [],
+  });
+}
+
 /// A suggestion plus an optional link to open.
 class SuggestionWithLink {
   final String suggestion;
@@ -27,6 +41,110 @@ enum _MoodCat {
 }
 
 class OpenAIService {
+
+
+  static CrisisDetectionResult detectCrisis({
+    required String mood,
+    required List<String> items,
+  }) {
+    final moodLower = mood.toLowerCase();
+    final itemsLower = items.map((i) => i.toLowerCase()).toList();
+    
+    // Crisis mood indicators
+    final severeMoodIndicators = [
+      'suicidal',
+      'suicide',
+      'kill myself',
+      'end my life',
+      'want to die',
+      'better off dead',
+      'no reason to live',
+      'can\'t go on',
+      'hurt myself',
+      'self harm',
+      'self-harm',
+    ];
+    
+    // High-risk mood indicators
+    final highRiskMoodIndicators = [
+      'depressed',
+      'hopeless',
+      'worthless',
+      'desperate',
+      'unbearable',
+      'can\'t take it',
+    ];
+    
+    // Dangerous items
+    final dangerousItems = [
+      'knife',
+      'knives',
+      'blade',
+      'razor',
+      'gun',
+      'pistol',
+      'firearm',
+      'weapon',
+      'pills',
+      'medication',
+      'rope',
+      'belt',
+    ];
+    
+    // Check for severe crisis indicators (immediate crisis)
+    final hasSevereMood = severeMoodIndicators.any((indicator) => 
+      moodLower.contains(indicator)
+    );
+    
+    if (hasSevereMood) {
+      return CrisisDetectionResult(
+        isCrisis: true,
+        safetyMessage: 'We\'re concerned about your safety. Please reach out to someone who can help immediately.',
+        hotlines: _getCrisisHotlines(),
+      );
+    }
+    
+    // Check for high-risk mood + dangerous items combination
+    final hasHighRiskMood = highRiskMoodIndicators.any((indicator) => 
+      moodLower.contains(indicator)
+    );
+    
+    final hasDangerousItem = itemsLower.any((item) => 
+      dangerousItems.any((dangerous) => item.contains(dangerous))
+    );
+    
+    if (hasHighRiskMood && hasDangerousItem) {
+      return CrisisDetectionResult(
+        isCrisis: true,
+        safetyMessage: 'Your safety is our priority. Please reach out for immediate support.',
+        hotlines: _getCrisisHotlines(),
+      );
+    }
+    
+    return CrisisDetectionResult(isCrisis: false);
+  }
+  
+  static List<String> _getCrisisHotlines() {
+    return [
+      '988 - Suicide & Crisis Lifeline (US)',
+      '1-800-273-8255 - National Suicide Prevention Lifeline',
+      'Text "HELLO" to 741741 - Crisis Text Line',
+      '1-800-799-7233 - National Domestic Violence Hotline',
+    ];
+  }
+
+  static String _formatCrisisResponse(CrisisDetectionResult crisis) {
+    final buffer = StringBuffer();
+    buffer.writeln(crisis.safetyMessage);
+    buffer.writeln();
+    buffer.writeln('Crisis Resources:');
+    for (final hotline in crisis.hotlines) {
+      buffer.writeln('• $hotline');
+    }
+    buffer.writeln();
+    buffer.writeln('You are not alone. Help is available 24/7.');
+    return buffer.toString();
+  }
   // ---------------------------------------------------------------------------
   // PUBLIC API
   // ---------------------------------------------------------------------------
@@ -39,6 +157,13 @@ class OpenAIService {
     String? uid,
     Map<String, String>? userPreferences,
   }) async {
+    // ADD THIS CRISIS CHECK at the very beginning:
+    final crisisCheck = detectCrisis(mood: mood, items: items);
+    if (crisisCheck.isCrisis) {
+      return _formatCrisisResponse(crisisCheck);
+    }
+    
+    // Then continue with your existing code...
     final r = await suggestWithLink(
       apiKey: apiKey,
       mood: mood,

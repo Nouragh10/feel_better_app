@@ -19,6 +19,8 @@ import 'screens/settings_screen.dart' show ghostMode;
 
 import 'widgets/ghost_mode_button.dart';
 import 'widgets/action_timer.dart';
+import 'widgets/daily_exercise_card.dart';
+import 'widgets/crisis_alert_dialog.dart';
 
 // ------------------ Elevated Brand Palette ------------------
 const kPrimaryCyan = Color(0xFF06B6D4);
@@ -70,7 +72,7 @@ class FeelBetterApp extends StatelessWidget {
     );
 
     return MaterialApp(
-      title: 'Feel Better',
+      title: 'Nearby',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.system,
       theme: ThemeData(
@@ -324,6 +326,18 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       return;
     }
 
+    // CRISIS CHECK FIRST - before showing loading or calling AI
+    final crisisCheck = OpenAIService.detectCrisis(mood: mood, items: items);
+    if (crisisCheck.isCrisis) {
+      // Show crisis dialog instead of regular suggestion
+      await CrisisAlertDialog.show(
+        context,
+        crisisCheck.safetyMessage ?? 'Please reach out for help',
+        crisisCheck.hotlines,
+      );
+      return; // Don't continue with regular suggestion
+    }
+
     setState(() {
       _loading = true;
       _extractedLink = null;
@@ -490,7 +504,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Feel Better'),
+        title: const Text('Nearby'),
         actions: [
           const GhostModeButton(compact: true),
           IconButton(
@@ -530,6 +544,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 24),
+                    
+                    const DailyExerciseCard(),
+                    
+                    const SizedBox(height: 32),
                     
                     Text(
                       'How are you feeling?',
@@ -809,22 +827,6 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
               ),
             ),
           ),
-
-          if (ghostMode.value) ...[
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Icon(Icons.visibility_off_rounded, size: 13, color: cs.outline),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    'Ghost mode on — not shared with friends',
-                    style: TextStyle(fontSize: 11, color: cs.outline),
-                  ),
-                ),
-              ],
-            ),
-          ],
         ],
       ),
     );
@@ -839,45 +841,46 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   }) {
     return InkWell(
       onTap: () => onChanged(!value),
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: value ? cs.primary.withOpacity(0.1) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
+          color: value
+              ? cs.primaryContainer.withOpacity(0.5)
+              : cs.surfaceVariant.withOpacity(0.3),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: value ? cs.primary : cs.outline.withOpacity(0.3),
+            color: value
+                ? cs.primary.withOpacity(0.5)
+                : cs.outline.withOpacity(0.2),
             width: 1.5,
           ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 20,
-              height: 20,
-              decoration: BoxDecoration(
-                color: value ? cs.primary : Colors.transparent,
-                borderRadius: BorderRadius.circular(5),
-                border: Border.all(
-                  color: value ? cs.primary : cs.outline.withOpacity(0.5),
-                  width: 2,
-                ),
-              ),
-              child: value
-                  ? const Icon(Icons.check_rounded, size: 14, color: Colors.white)
-                  : null,
+            Icon(
+              icon,
+              size: 18,
+              color: value ? cs.primary : cs.onSurfaceVariant,
             ),
             const SizedBox(width: 8),
-            Icon(icon, size: 16, color: cs.onSurface.withOpacity(0.7)),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: cs.onSurface.withOpacity(0.8),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: value ? cs.primary : cs.onSurfaceVariant,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              value ? Icons.check_circle : Icons.circle_outlined,
+              size: 16,
+              color: value ? cs.primary : cs.onSurfaceVariant.withOpacity(0.5),
             ),
           ],
         ),

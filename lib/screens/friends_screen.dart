@@ -342,6 +342,178 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     );
   }
 
+  Future<void> _sendReaction({
+    required String toUid,
+    required String reaction,
+    required String originalSummary,
+  }) async {
+    if (_uid == null) return;
+    
+    try {
+      final inbox = _db.collection('pings').doc(toUid).collection('inbox').doc();
+      await inbox.set({
+        'pingId': inbox.id,
+        'type': 'reaction',
+        'fromUid': _uid!,
+        'toUid': toUid,
+        'reaction': reaction,
+        'note': reaction,
+        'originalSummary': originalSummary,
+        'read': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Sent: $reaction'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not send: $e'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+    }
+  }
+
+  void _showReactionPicker({
+    required BuildContext context,
+    required String toUid,
+    required String summary,
+    required ColorScheme cs,
+    required bool isDark,
+  }) {
+    final reactions = [
+      {'text': 'I get that feeling! 💙', 'icon': Icons.favorite_rounded},
+      {'text': 'I got the same suggestion!', 'icon': Icons.lightbulb_rounded},
+      {'text': 'You got this! 💪', 'icon': Icons.emoji_emotions_rounded},
+      {'text': 'Proud of you!', 'icon': Icons.celebration_rounded},
+      {'text': 'Sending good vibes ✨', 'icon': Icons.auto_awesome_rounded},
+      {'text': 'That\'s awesome!', 'icon': Icons.thumb_up_rounded},
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [kGlassDark.withOpacity(0.95), kGlassDark.withOpacity(0.9)]
+                  : [kGlassLight.withOpacity(0.98), kGlassLight.withOpacity(0.95)],
+            ),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: cs.primary.withOpacity(0.3), width: 2),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: [cs.primary, cs.secondary]),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.chat_bubble_rounded, color: Colors.white, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Send a quick reaction',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              ListView.separated(
+                shrinkWrap: true,
+                itemCount: reactions.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (_, i) {
+                  final reaction = reactions[i];
+                  return InkWell(
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      _sendReaction(
+                        toUid: toUid,
+                        reaction: reaction['text'] as String,
+                        originalSummary: summary,
+                      );
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.white.withOpacity(0.05)
+                            : Colors.black.withOpacity(0.03),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.1)
+                              : Colors.black.withOpacity(0.1),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            reaction['icon'] as IconData,
+                            color: cs.primary,
+                            size: 24,
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Text(
+                              reaction['text'] as String,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          Icon(
+                            Icons.arrow_forward_rounded,
+                            color: cs.onSurface.withOpacity(0.3),
+                            size: 20,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Cancel'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -812,23 +984,57 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
                           width: 1.5,
                         ),
                       ),
-                      child: Row(
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.check_circle_rounded, color: cs.primary, size: 20),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(who, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                const SizedBox(height: 4),
-                                Text(_compactSummary(summary, max: 240)),
-                              ],
-                            ),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.check_circle_rounded, color: cs.primary, size: 20),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(who, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                    const SizedBox(height: 4),
+                                    Text(_compactSummary(summary, max: 240)),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(_friendlyTime(ts), style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5))),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          Text(_friendlyTime(ts), style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5))),
+                          
+                          if (authorId != _uid) ...[
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                onPressed: () => _showReactionPicker(
+                                  context: context,
+                                  toUid: authorId,
+                                  summary: summary,
+                                  cs: cs,
+                                  isDark: isDark,
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                  side: BorderSide(color: cs.primary.withOpacity(0.5)),
+                                ),
+                                icon: Icon(Icons.chat_bubble_outline_rounded, size: 18, color: cs.primary),
+                                label: Text(
+                                  'Send reaction',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: cs.primary,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     );
@@ -869,6 +1075,10 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
             final data = d.data();
             final type = data['type'] as String? ?? 'ping';
 
+            if (type == 'reaction') {
+              return _buildReactionCard(cs, isDark, d, data);
+            }
+            
             if (type == 'trusted_person_notification') {
               return _buildTrustedPersonNotificationCard(cs, isDark, d, data);
             }
@@ -879,6 +1089,131 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
 
             return _buildPingCard(cs, isDark, d, data);
           },
+        );
+      },
+    );
+  }
+
+  Widget _buildReactionCard(ColorScheme cs, bool isDark, QueryDocumentSnapshot d, Map<String, dynamic> data) {
+    final fromUid = data['fromUid'] as String? ?? '';
+    final reaction = data['reaction'] as String? ?? '';
+    final originalSummary = data['originalSummary'] as String? ?? '';
+    final read = data['read'] as bool? ?? false;
+    final ts = (data['createdAt'] as Timestamp?)?.toDate();
+
+    return FutureBuilder<Map<String, dynamic>?>(
+      future: _getUser(fromUid),
+      builder: (ctx, userSnap) {
+        final u = userSnap.data;
+        final name = u?['displayName'] ?? 'Someone';
+        final uname = u?['username'] ?? '';
+        
+        return InkWell(
+          onTap: () => _fs.markPingRead(recipientUid: _uid!, pingId: d.id),
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: read
+                    ? [
+                        (isDark ? kGlassDark : kGlassLight).withOpacity(0.3),
+                        (isDark ? kGlassDark : kGlassLight).withOpacity(0.3),
+                      ]
+                    : [
+                        kPrimaryCyan.withOpacity(0.1),
+                        kSecondaryPurple.withOpacity(0.1),
+                      ],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: read
+                    ? (isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.3))
+                    : cs.primary.withOpacity(0.4),
+                width: read ? 1 : 2,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [kPrimaryCyan, kSecondaryPurple],
+                        ),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.chat_bubble_rounded, color: Colors.white, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$name reacted to your moment',
+                            style: TextStyle(
+                              fontWeight: read ? FontWeight.w500 : FontWeight.w700,
+                              fontSize: 15,
+                            ),
+                          ),
+                          if (uname.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              '@$uname',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: cs.onSurface.withOpacity(0.5),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    Text(
+                      _friendlyTime(ts),
+                      style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? Colors.white.withOpacity(0.05)
+                        : Colors.black.withOpacity(0.03),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: cs.primary.withOpacity(0.2),
+                    ),
+                  ),
+                  child: Text(
+                    reaction,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: cs.primary,
+                    ),
+                  ),
+                ),
+                if (originalSummary.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'On: ${_compactSummary(originalSummary, max: 60)}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: cs.onSurface.withOpacity(0.5),
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         );
       },
     );
@@ -1158,7 +1493,7 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     return '${diff.inDays}d';
   }
 
-String _compactSummary(String s, {int max = 90}) {
+  String _compactSummary(String s, {int max = 90}) {
     var t = s.trim();
     final m = RegExp(
       r'^\s*felt\s+(.+?)\s+and\s+was\s+recommended:\s+(.+)$',
@@ -1175,8 +1510,7 @@ String _compactSummary(String s, {int max = 90}) {
   }
 }
 
-
-//TrustedPersonBadge widget
+// TrustedPersonBadge widget
 class TrustedPersonBadge extends StatelessWidget {
   const TrustedPersonBadge({super.key});
 
