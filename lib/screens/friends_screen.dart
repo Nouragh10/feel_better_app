@@ -934,120 +934,388 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     await _runSuggestionAndTimer(friendUid: friendUid, mood: mood, items: items, dayKey: dayKey);
   }
 
-  Widget _buildFeedTab(ColorScheme cs, bool isDark) {
-    return FutureBuilder<List<String>>(
-      future: _fs.listFriendIds(_uid!),
-      builder: (context, idsSnap) {
-        if (idsSnap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        final ids = idsSnap.data ?? const <String>[];
-        if (ids.isEmpty) {
-          return Center(
-            child: Text('Add friends to see their shares', style: TextStyle(color: cs.onSurface.withOpacity(0.6))),
+
+Widget _buildFeedTab(ColorScheme cs, bool isDark) {
+  return FutureBuilder<List<String>>(
+    future: _fs.listFriendIds(_uid!),
+    builder: (context, idsSnap) {
+      if (idsSnap.connectionState == ConnectionState.waiting) {
+        return const Center(child: CircularProgressIndicator());
+      }
+      final ids = idsSnap.data ?? const <String>[];
+      if (ids.isEmpty) {
+        return Center(
+          child: Text('Add friends to see their shares', style: TextStyle(color: cs.onSurface.withOpacity(0.6))),
+        );
+      }
+      return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: _fs.publicFeedForFriends(friendIds: ids, limit: 50),
+        builder: (context, feedSnap) {
+          if (feedSnap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final docs = feedSnap.data?.docs ?? [];
+          if (docs.isEmpty) {
+            return Center(child: Text('No shares yet', style: TextStyle(color: cs.onSurface.withOpacity(0.6))));
+          }
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: docs.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (ctx, i) {
+              final d = docs[i];
+              final entryId = d.id;
+              final data = d.data();
+              final authorId = data['authorId'] as String? ?? '';
+              final summary = data['publicSummary'] as String? ?? '';
+              final ts = (data['createdAt'] as Timestamp?)?.toDate();
+
+              return FutureBuilder<Map<String, dynamic>?>(
+                future: _getUser(authorId),
+                builder: (ctx, userSnap) {
+                  final u = userSnap.data;
+                  final name = (u?['displayName'] as String?) ?? '';
+                  final who = name.isNotEmpty ? name : 'Someone';
+
+                  return _buildFeedItemCard(
+                    cs: cs,
+                    isDark: isDark,
+                    entryId: entryId,
+                    authorId: authorId,
+                    authorName: who,
+                    summary: summary,
+                    timestamp: ts,
+                  );
+                },
+              );
+            },
           );
-        }
-        return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          stream: _fs.publicFeedForFriends(friendIds: ids, limit: 50),
-          builder: (context, feedSnap) {
-            if (feedSnap.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final docs = feedSnap.data?.docs ?? [];
-            if (docs.isEmpty) {
-              return Center(child: Text('No shares yet', style: TextStyle(color: cs.onSurface.withOpacity(0.6))));
-            }
-            return ListView.separated(
-              padding: const EdgeInsets.all(16),
-              itemCount: docs.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 12),
-              itemBuilder: (ctx, i) {
-                final d = docs[i].data();
-                final authorId = d['authorId'] as String? ?? '';
-                final summary = d['publicSummary'] as String? ?? '';
-                final ts = (d['createdAt'] as Timestamp?)?.toDate();
+        },
+      );
+    },
+  );
+}
 
-                return FutureBuilder<Map<String, dynamic>?>(
-                  future: _getUser(authorId),
-                  builder: (ctx, userSnap) {
-                    final u = userSnap.data;
-                    final name = (u?['displayName'] as String?) ?? '';
-                    final who = name.isNotEmpty ? name : 'Someone';
+// Add this new method to build individual feed items
+Widget _buildFeedItemCard({
+  required ColorScheme cs,
+  required bool isDark,
+  required String entryId,
+  required String authorId,
+  required String authorName,
+  required String summary,
+  required DateTime? timestamp,
+}) {
+  return Container(
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: isDark ? kGlassDark.withOpacity(0.4) : kGlassLight.withOpacity(0.6),
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(
+        color: isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.5),
+        width: 1.5,
+      ),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.check_circle_rounded, color: cs.primary, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(authorName, style: const TextStyle(fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 4),
+                  Text(_compactSummary(summary, max: 240)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(_friendlyTime(timestamp), style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5))),
+          ],
+        ),
+        
+        const SizedBox(height: 12),
+        
+        // Comments section
+        _buildCommentsSection(
+          cs: cs,
+          isDark: isDark,
+          entryId: entryId,
+          authorId: authorId,
+        ),
+        
+        // Action buttons row
+        if (authorId != _uid) ...[
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _showReactionPicker(
+                    context: context,
+                    toUid: authorId,
+                    summary: summary,
+                    cs: cs,
+                    isDark: isDark,
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    side: BorderSide(color: cs.primary.withOpacity(0.5)),
+                  ),
+                  icon: Icon(Icons.chat_bubble_outline_rounded, size: 18, color: cs.primary),
+                  label: Text(
+                    'Send reaction',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: cs.primary,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => _addComment(
+                    context: context,
+                    entryId: entryId,
+                    authorId: authorId,
+                    cs: cs,
+                  ),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    backgroundColor: cs.secondary,
+                  ),
+                  icon: const Icon(Icons.comment_rounded, size: 18),
+                  label: const Text(
+                    'Comment',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    ),
+  );
+}
 
-                    return Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: isDark ? kGlassDark.withOpacity(0.4) : kGlassLight.withOpacity(0.6),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.5),
-                          width: 1.5,
+// Add this method to build the comments section
+Widget _buildCommentsSection({
+  required ColorScheme cs,
+  required bool isDark,
+  required String entryId,
+  required String authorId,
+}) {
+  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: _db
+        .collection('entries_public')
+        .doc(entryId)
+        .collection('comments')
+        .orderBy('createdAt', descending: false)
+        .limit(20)
+        .snapshots(),
+    builder: (context, commentsSnap) {
+      final comments = commentsSnap.data?.docs ?? [];
+      
+      if (comments.isEmpty) {
+        return const SizedBox.shrink();
+      }
+
+      return Container(
+        margin: const EdgeInsets.only(top: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isDark
+              ? Colors.white.withOpacity(0.03)
+              : Colors.black.withOpacity(0.02),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: cs.outline.withOpacity(0.2),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.comment_rounded, size: 14, color: cs.onSurface.withOpacity(0.5)),
+                const SizedBox(width: 6),
+                Text(
+                  '${comments.length} ${comments.length == 1 ? 'comment' : 'comments'}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurface.withOpacity(0.6),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            ...comments.map((commentDoc) {
+              final commentData = commentDoc.data();
+              final commenterId = commentData['fromUid'] as String? ?? '';
+              final commentText = commentData['text'] as String? ?? '';
+              final commentTs = (commentData['createdAt'] as Timestamp?)?.toDate();
+
+              return FutureBuilder<Map<String, dynamic>?>(
+                future: _getUser(commenterId),
+                builder: (ctx, userSnap) {
+                  final u = userSnap.data;
+                  final commenterName = (u?['displayName'] as String?) ?? 'Someone';
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CircleAvatar(
+                          radius: 12,
+                          backgroundColor: cs.primaryContainer,
+                          child: Text(
+                            commenterName.isNotEmpty ? commenterName[0].toUpperCase() : '?',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: cs.onPrimaryContainer,
+                            ),
+                          ),
                         ),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Icon(Icons.check_circle_rounded, color: cs.primary, size: 20),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(who, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                    const SizedBox(height: 4),
-                                    Text(_compactSummary(summary, max: 240)),
-                                  ],
+                              Row(
+                                children: [
+                                  Text(
+                                    commenterName,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: cs.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    _friendlyTime(commentTs),
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: cs.onSurface.withOpacity(0.4),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                commentText,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: cs.onSurface.withOpacity(0.8),
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Text(_friendlyTime(ts), style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5))),
                             ],
                           ),
-                          
-                          if (authorId != _uid) ...[
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: () => _showReactionPicker(
-                                  context: context,
-                                  toUid: authorId,
-                                  summary: summary,
-                                  cs: cs,
-                                  isDark: isDark,
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                                  side: BorderSide(color: cs.primary.withOpacity(0.5)),
-                                ),
-                                icon: Icon(Icons.chat_bubble_outline_rounded, size: 18, color: cs.primary),
-                                label: Text(
-                                  'Send reaction',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: cs.primary,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            }).toList(),
+          ],
+        ),
+      );
+    },
+  );
+}
 
+// Add this method to handle adding comments
+Future<void> _addComment({
+  required BuildContext context,
+  required String entryId,
+  required String authorId,
+  required ColorScheme cs,
+}) async {
+  final controller = TextEditingController();
+  
+  final comment = await showDialog<String?>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Add a comment'),
+      content: TextField(
+        controller: controller,
+        maxLength: 200,
+        maxLines: 3,
+        decoration: const InputDecoration(
+          hintText: 'Write something supportive...',
+          border: OutlineInputBorder(),
+        ),
+        autofocus: true,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, null),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+          child: const Text('Post'),
+        ),
+      ],
+    ),
+  );
+
+  if (comment == null || comment.isEmpty) return;
+
+  try {
+    final commentRef = _db
+        .collection('entries_public')
+        .doc(entryId)
+        .collection('comments')
+        .doc();
+    
+    await commentRef.set({
+      'commentId': commentRef.id,
+      'fromUid': _uid!,
+      'toUid': authorId,
+      'text': comment,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
+    // Send notification to the author
+    if (authorId != _uid) {
+      final userSnap = await _fs.getUser(_uid!);
+      final userData = userSnap.data();
+      final myUsername = userData?['username'] as String? ?? 'Someone';
+      
+      final inbox = _db.collection('pings').doc(authorId).collection('inbox').doc();
+      await inbox.set({
+        'pingId': inbox.id,
+        'type': 'comment',
+        'fromUid': _uid!,
+        'toUid': authorId,
+        'entryId': entryId,
+        'commentText': comment,
+        'fromUsername': myUsername,
+        'read': false,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    if (!mounted) return;
+    _showSnackBar('Comment posted!');
+  } catch (e) {
+    if (!mounted) return;
+    _showSnackBar('Could not post comment: $e');
+  }
+}
   Widget _buildInboxTab(ColorScheme cs, bool isDark) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: _fs.pingsInboxStream(_uid!),
@@ -1085,6 +1353,10 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
             
             if (type == 'streak_invite') {
               return _buildStreakInviteCard(cs, isDark, d, data);
+            }
+
+            if (type == 'comment') {
+              return _buildCommentNotificationCard(cs, isDark, d, data);
             }
 
             return _buildPingCard(cs, isDark, d, data);
@@ -1302,6 +1574,99 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     );
   }
 
+
+// PATH: lib/screens/friends_screen.dart
+// Add this method to handle comment notification cards (add after _buildTrustedPersonNotificationCard around line 700)
+
+Widget _buildCommentNotificationCard(
+  ColorScheme cs,
+  bool isDark,
+  QueryDocumentSnapshot d,
+  Map<String, dynamic> data,
+) {
+  final fromUid = data['fromUid'] as String? ?? '';
+  final fromUsername = data['fromUsername'] as String? ?? '';
+  final commentText = data['commentText'] as String? ?? '';
+  final read = data['read'] as bool? ?? false;
+  final ts = (data['createdAt'] as Timestamp?)?.toDate();
+
+  return InkWell(
+    onTap: () => _fs.markPingRead(recipientUid: _uid!, pingId: d.id),
+    borderRadius: BorderRadius.circular(20),
+    child: Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: read
+              ? [
+                  (isDark ? kGlassDark : kGlassLight).withOpacity(0.3),
+                  (isDark ? kGlassDark : kGlassLight).withOpacity(0.3),
+                ]
+              : [
+                  kSecondaryPurple.withOpacity(0.1),
+                  kPrimaryCyan.withOpacity(0.1),
+                ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: read
+              ? (isDark ? Colors.white.withOpacity(0.05) : Colors.white.withOpacity(0.3))
+              : cs.secondary.withOpacity(0.4),
+          width: read ? 1 : 2,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [kSecondaryPurple, kPrimaryCyan],
+              ),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.comment_rounded, color: Colors.white, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '@$fromUsername commented on your post',
+                  style: TextStyle(
+                    fontWeight: read ? FontWeight.w500 : FontWeight.w700,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '"$commentText"',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: cs.onSurface.withOpacity(0.7),
+                    fontStyle: FontStyle.italic,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _friendlyTime(ts),
+            style: TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.5)),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+
+
+
   Widget _buildStreakInviteCard(ColorScheme cs, bool isDark, QueryDocumentSnapshot d, Map<String, dynamic> data) {
     final fromUid = data['fromUid'] as String? ?? '';
     final note = data['note'] as String? ?? '';
@@ -1509,6 +1874,7 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     return t;
   }
 }
+
 
 // TrustedPersonBadge widget
 class TrustedPersonBadge extends StatelessWidget {

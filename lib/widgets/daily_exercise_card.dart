@@ -1,10 +1,10 @@
 // PATH: lib/widgets/daily_exercise_card.dart
-// Add this widget to your home screen (main.dart)
-
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/daily_exercise_service.dart';
+import '../services/firestore_service.dart';
+import '../screens/settings_screen.dart' show ghostMode;
 
 class DailyExerciseCard extends StatefulWidget {
   const DailyExerciseCard({super.key});
@@ -206,15 +206,58 @@ class _DailyExerciseScreenState extends State<DailyExerciseScreen> {
     try {
       await _service.completeToday(uid);
 
+      // SHARE WITH FRIENDS (if not in ghost mode)
+      if (!ghostMode.value) {
+        try {
+          final fs = FirestoreService();
+          
+          // Create an entry for the exercise completion
+          final entryId = await fs.addExerciseCompletionEntry(
+            uid: uid,
+            exerciseTitle: widget.exercise.title,
+            exerciseType: widget.exercise.type.toString(),
+            shareWithFriends: true,
+            createdAtLocal: DateTime.now(),
+          );
+
+          // Mirror to public feed
+          await fs.mirrorPublicEntry(
+            entryId: entryId,
+            authorId: uid,
+            publicSummary: 'completed today\'s exercise: ${widget.exercise.title}',
+          );
+
+          // Notify trusted person
+          try {
+            final userSnap = await fs.getUser(uid);
+            final userData = userSnap.data();
+            final username = userData?['username'] as String? ?? 'Someone';
+            await fs.notifyTrustedPerson(
+              fromUid: uid,
+              fromUsername: username,
+              summary: 'completed today\'s exercise: ${widget.exercise.title}',
+            );
+          } catch (_) {}
+        } catch (e) {
+          print('Failed to share exercise completion: $e');
+        }
+      }
+
       if (!mounted) return;
       
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Row(
-            children: const [
-              Icon(Icons.celebration_rounded, color: Colors.white),
-              SizedBox(width: 12),
-              Expanded(child: Text('Great job! Your streak has been updated 🔥')),
+            children: [
+              const Icon(Icons.celebration_rounded, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  ghostMode.value 
+                    ? 'Great job! Your streak has been updated 🔥'
+                    : 'Great job! Shared with friends 🔥',
+                ),
+              ),
             ],
           ),
           behavior: SnackBarBehavior.floating,
@@ -223,7 +266,6 @@ class _DailyExerciseScreenState extends State<DailyExerciseScreen> {
         ),
       );
 
-      // Return true to indicate completion
       Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;

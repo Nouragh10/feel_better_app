@@ -181,6 +181,34 @@ class FirestoreService {
     return ref.id;
   }
 
+  Future<String> addExerciseCompletionEntry({
+    required String uid,
+    required String exerciseTitle,
+    required String exerciseType,
+    bool shareWithFriends = true,
+    DateTime? createdAtLocal,
+  }) async {
+    final month = DateFormat('yyyy-MM').format(DateTime.now());
+    final ref = _db.collection('entries').doc(uid).collection(month).doc();
+    
+    final publicSummary = 'completed today\'s exercise: $exerciseTitle';
+    
+    await ref.set({
+      'entryId': ref.id,
+      'authorId': uid,
+      'type': 'exercise_completion',
+      'exerciseTitle': exerciseTitle,
+      'exerciseType': exerciseType,
+      'publicSummary': publicSummary,
+      'shareWithFriends': shareWithFriends,
+      'createdAt': FieldValue.serverTimestamp(),
+      if (createdAtLocal != null)
+        'createdAtLocal': createdAtLocal.toIso8601String(),
+    });
+    
+    return ref.id;
+  }
+
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> entriesForRange({
     required String uid,
     required DateTime startInclusive,
