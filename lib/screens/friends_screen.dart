@@ -69,6 +69,160 @@ class _FriendsScreenState extends State<FriendsScreen> with SingleTickerProvider
     super.dispose();
   }
 
+
+
+Future<void> _openChat(String friendUid, String friendName) async {
+    if (_uid == null) return;
+    
+    // Create chat ID (deterministic based on both user IDs)
+    final chatId = _pairId(_uid!, friendUid);
+    
+    // Ensure chat document exists
+    final chatRef = FirebaseFirestore.instance.collection('chats').doc(chatId);
+    final chatSnap = await chatRef.get();
+    
+    if (!chatSnap.exists) {
+      await chatRef.set({
+        'chatId': chatId,
+        'participants': [_uid!, friendUid]..sort(),
+        'streak': 0,
+        'longestStreak': 0,
+        'lastActivityDate': null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    
+    if (!mounted) return;
+    
+    // Navigate to chat screen
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          friendId: friendUid,
+          friendName: friendName,
+          chatId: chatId,
+        ),
+      ),
+    );
+  }
+
+
+// UPDATE YOUR _buildFriendCard method to include a chat button:
+
+
+Widget _buildFriendCard({
+  required ColorScheme cs,
+  required bool isDark,
+  required String name,
+  required String username,
+  required String friendUid,
+  required String status,
+}) {
+  return FutureBuilder<bool>(
+    future: _isTrustedPerson(friendUid),
+    builder: (context, trustedSnap) {
+      final isTrusted = trustedSnap.data ?? false;
+      
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isDark ? kGlassDark.withOpacity(0.4) : kGlassLight.withOpacity(0.6),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isTrusted 
+                ? const Color(0xFFFF6B9D).withOpacity(0.5)
+                : (isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.5)),
+            width: isTrusted ? 2 : 1.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            Stack(
+              children: [
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: cs.primaryContainer,
+                  child: Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : '?',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                      color: cs.onPrimaryContainer,
+                    ),
+                  ),
+                ),
+                if (isTrusted)
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: TrustedPersonBadge(),
+                  ),
+              ],
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          name,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (isTrusted) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFFFF6B9D), Color(0xFFFFB6C1)],
+                            ),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text(
+                            'Trusted',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '@$username • $status',
+                    style: TextStyle(fontSize: 13, color: cs.onSurface.withOpacity(0.6)),
+                  ),
+                ],
+              ),
+            ),
+            // ADD CHAT BUTTON HERE
+            if (status == 'accepted') ...[
+              IconButton(
+                tooltip: 'Open chat',
+                icon: const Icon(Icons.chat_bubble_outline_rounded),
+                onPressed: () => _openChat(friendUid, name),
+                color: cs.primary,
+              ),
+            ],
+            _buildFriendActions(cs, friendUid, status),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+
+
   Future<void> _initIdentity() async {
     String? uid;
     try {

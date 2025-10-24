@@ -1,3 +1,4 @@
+// PATH: lib/screens/chat_screen.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -6,7 +7,7 @@ import 'shared_activity_screen.dart';
 class ChatScreen extends StatefulWidget {
   final String friendId;
   final String friendName;
-  final String chatId; // Unique ID for this friendship chat
+  final String chatId;
 
   const ChatScreen({
     Key? key,
@@ -59,11 +60,11 @@ class _ChatScreenState extends State<ChatScreen> {
         .add({
       'type': activityType,
       'initiatorId': _currentUserId,
-      'status': 'pending', // pending, in_progress, completed
+      'status': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
       'participants': {
-        _currentUserId: {'completed': false, 'joinedAt': null},
-        widget.friendId: {'completed': false, 'joinedAt': null},
+        _currentUserId: {'completed': false, 'joinedAt': null, 'completedAt': null},
+        widget.friendId: {'completed': false, 'joinedAt': null, 'completedAt': null},
       },
     });
 
@@ -95,8 +96,138 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _showActivityPicker() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        margin: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                    Theme.of(context).colorScheme.secondary.withOpacity(0.1),
+                  ],
+                ),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.favorite, color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Do a mental health exercise together',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _buildActivityOption(
+              title: 'Breathing Exercise',
+              subtitle: 'Box breathing - 2 minutes',
+              icon: Icons.air,
+              color: Colors.cyan,
+              onTap: () {
+                Navigator.pop(context);
+                _initiateSharedActivity('breathing');
+              },
+            ),
+            _buildActivityOption(
+              title: 'Yoga Session',
+              subtitle: 'Gentle flow - 5 minutes',
+              icon: Icons.self_improvement,
+              color: Colors.purple,
+              onTap: () {
+                Navigator.pop(context);
+                _initiateSharedActivity('yoga');
+              },
+            ),
+            _buildActivityOption(
+              title: 'Calm Video',
+              subtitle: 'Watch together - 2 minutes',
+              icon: Icons.play_circle,
+              color: Colors.orange,
+              onTap: () {
+                Navigator.pop(context);
+                _initiateSharedActivity('video');
+              },
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActivityOption({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color, size: 28),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_rounded,
+              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.3),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -114,7 +245,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 final streak = data?['streak'] ?? 0;
                 return Text(
                   '🔥 $streak day streak',
-                  style: const TextStyle(fontSize: 12, color: Colors.orange),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: streak > 0 ? Colors.orange : cs.onSurface.withOpacity(0.5),
+                    fontWeight: FontWeight.w600,
+                  ),
                 );
               },
             ),
@@ -148,16 +283,16 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey),
+                        Icon(Icons.chat_bubble_outline, size: 64, color: cs.onSurface.withOpacity(0.3)),
                         const SizedBox(height: 16),
-                        const Text(
+                        Text(
                           'Start your conversation!',
-                          style: TextStyle(fontSize: 18, color: Colors.grey),
+                          style: TextStyle(fontSize: 18, color: cs.onSurface.withOpacity(0.6)),
                         ),
                         const SizedBox(height: 8),
-                        const Text(
+                        Text(
                           'Try doing a mental health exercise together',
-                          style: TextStyle(fontSize: 14, color: Colors.grey),
+                          style: TextStyle(fontSize: 14, color: cs.onSurface.withOpacity(0.5)),
                         ),
                       ],
                     ),
@@ -191,28 +326,35 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
 
-          // Activity selector button
+          // Activity invite button - PROMINENT PLACEMENT
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.purple.shade50,
-              border: Border(top: BorderSide(color: Colors.grey.shade300)),
+              gradient: LinearGradient(
+                colors: [
+                  cs.primary.withOpacity(0.1),
+                  cs.secondary.withOpacity(0.1),
+                ],
+              ),
+              border: Border(top: BorderSide(color: cs.outline.withOpacity(0.2))),
             ),
-            child: Row(
-              children: [
-                const Icon(Icons.favorite, color: Colors.purple, size: 20),
-                const SizedBox(width: 8),
-                const Text(
-                  'Do together:',
-                  style: TextStyle(fontWeight: FontWeight.w600),
+            child: SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: FilledButton.icon(
+                onPressed: _showActivityPicker,
+                style: FilledButton.styleFrom(
+                  backgroundColor: cs.primary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                 ),
-                const SizedBox(width: 12),
-                _buildActivityButton('Breathing', Icons.air, Colors.cyan),
-                const SizedBox(width: 8),
-                _buildActivityButton('Yoga', Icons.self_improvement, Colors.purple),
-                const SizedBox(width: 8),
-                _buildActivityButton('Video', Icons.play_circle, Colors.orange),
-              ],
+                icon: const Icon(Icons.favorite_rounded),
+                label: const Text(
+                  'Do an exercise together',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+              ),
             ),
           ),
 
@@ -220,7 +362,7 @@ class _ChatScreenState extends State<ChatScreen> {
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: cs.surface,
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withOpacity(0.05),
@@ -241,7 +383,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         borderSide: BorderSide.none,
                       ),
                       filled: true,
-                      fillColor: Colors.grey.shade100,
+                      fillColor: cs.surfaceVariant.withOpacity(0.5),
                       contentPadding: const EdgeInsets.symmetric(
                         horizontal: 20,
                         vertical: 12,
@@ -254,7 +396,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 const SizedBox(width: 12),
                 CircleAvatar(
-                  backgroundColor: Colors.cyan,
+                  backgroundColor: cs.primary,
                   child: IconButton(
                     icon: const Icon(Icons.send, color: Colors.white),
                     onPressed: _sendMessage,
@@ -264,21 +406,6 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildActivityButton(String label, IconData icon, Color color) {
-    return ElevatedButton.icon(
-      onPressed: () => _initiateSharedActivity(label.toLowerCase()),
-      icon: Icon(icon, size: 16),
-      label: Text(label),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color.withOpacity(0.1),
-        foregroundColor: color,
-        elevation: 0,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
     );
   }
@@ -296,13 +423,17 @@ class _ChatScreenState extends State<ChatScreen> {
           maxWidth: MediaQuery.of(context).size.width * 0.7,
         ),
         decoration: BoxDecoration(
-          color: isMe ? Colors.cyan : Colors.grey.shade200,
+          color: isMe 
+              ? Theme.of(context).colorScheme.primary 
+              : Theme.of(context).colorScheme.surfaceVariant,
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(
           text,
           style: TextStyle(
-            color: isMe ? Colors.white : Colors.black87,
+            color: isMe 
+                ? Colors.white 
+                : Theme.of(context).colorScheme.onSurface,
             fontSize: 15,
           ),
         ),
@@ -318,27 +449,32 @@ class _ChatScreenState extends State<ChatScreen> {
     IconData icon;
     Color color;
     String displayName;
+    String duration;
 
     switch (activityType) {
       case 'breathing':
         icon = Icons.air;
         color = Colors.cyan;
         displayName = 'Breathing Exercise';
+        duration = '2 min';
         break;
       case 'yoga':
         icon = Icons.self_improvement;
         color = Colors.purple;
         displayName = 'Yoga Session';
+        duration = '5 min';
         break;
       case 'video':
         icon = Icons.play_circle;
         color = Colors.orange;
         displayName = 'Calm Video';
+        duration = '2 min';
         break;
       default:
         icon = Icons.favorite;
         color = Colors.pink;
         displayName = activityType;
+        duration = '2 min';
     }
 
     return Container(
@@ -363,19 +499,31 @@ class _ChatScreenState extends State<ChatScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      isMe ? 'You invited $displayName' : '${widget.friendName} invited $displayName',
+                      isMe 
+                          ? 'You invited $displayName' 
+                          : '${widget.friendName} invited $displayName',
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 15,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      'Complete together to grow your streak! 🔥',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: Colors.grey.shade600,
-                      ),
+                    Row(
+                      children: [
+                        Icon(Icons.timer_outlined, size: 14, color: Colors.grey.shade600),
+                        const SizedBox(width: 4),
+                        Text(
+                          duration,
+                          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                        ),
+                        const SizedBox(width: 12),
+                        const Icon(Icons.local_fire_department, size: 14, color: Colors.orange),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Complete together to grow your streak!',
+                          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -581,14 +729,57 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (allCompleted) {
-      // Increment streak
-      await FirebaseFirestore.instance
+      // Check if this is today's first completion for streak
+      final chatDoc = await FirebaseFirestore.instance
           .collection('chats')
           .doc(widget.chatId)
-          .set({
-        'streak': FieldValue.increment(1),
-        'lastActivityDate': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+          .get();
+      
+      final chatData = chatDoc.data() as Map<String, dynamic>?;
+      final lastActivityDate = (chatData?['lastActivityDate'] as Timestamp?)?.toDate();
+      final currentStreak = (chatData?['streak'] as int?) ?? 0;
+      final longestStreak = (chatData?['longestStreak'] as int?) ?? 0;
+      
+      final today = DateTime.now();
+      final todayKey = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+      
+      int newStreak = currentStreak;
+      bool shouldIncrementStreak = false;
+      
+      if (lastActivityDate == null) {
+        // First ever activity
+        newStreak = 1;
+        shouldIncrementStreak = true;
+      } else {
+        final lastKey = '${lastActivityDate.year}-${lastActivityDate.month.toString().padLeft(2, '0')}-${lastActivityDate.day.toString().padLeft(2, '0')}';
+        
+        if (lastKey != todayKey) {
+          // Different day - check if consecutive
+          final yesterday = today.subtract(const Duration(days: 1));
+          final yesterdayKey = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
+          
+          if (lastKey == yesterdayKey) {
+            // Consecutive day!
+            newStreak = currentStreak + 1;
+            shouldIncrementStreak = true;
+          } else {
+            // Streak broken, start fresh
+            newStreak = 1;
+            shouldIncrementStreak = true;
+          }
+        }
+      }
+      
+      if (shouldIncrementStreak) {
+        await FirebaseFirestore.instance
+            .collection('chats')
+            .doc(widget.chatId)
+            .set({
+          'streak': newStreak,
+          'longestStreak': newStreak > longestStreak ? newStreak : longestStreak,
+          'lastActivityDate': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
 
       // Send completion message
       await FirebaseFirestore.instance
@@ -599,6 +790,8 @@ class _ChatScreenState extends State<ChatScreen> {
         'type': 'activity_completed',
         'activityId': activityId,
         'timestamp': FieldValue.serverTimestamp(),
+        'streakIncremented': shouldIncrementStreak,
+        'newStreak': newStreak,
       });
 
       // Update activity status
@@ -626,6 +819,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
           final data = snapshot.data!.data() as Map<String, dynamic>?;
           final streak = data?['streak'] ?? 0;
+          final longestStreak = data?['longestStreak'] ?? 0;
 
           return Padding(
             padding: const EdgeInsets.all(24),
@@ -641,14 +835,21 @@ class _ChatScreenState extends State<ChatScreen> {
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     _buildStat('🔥', streak.toString(), 'Day Streak'),
-                    _buildStat('💜', 'Together', 'Growing'),
+                    _buildStat('⭐', longestStreak.toString(), 'Longest'),
                   ],
                 ),
                 const SizedBox(height: 24),
-                const Text(
-                  'Complete mental health exercises together to grow your streak!',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Text(
+                    'Complete mental health exercises together daily to grow your streak!',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 14),
+                  ),
                 ),
               ],
             ),
