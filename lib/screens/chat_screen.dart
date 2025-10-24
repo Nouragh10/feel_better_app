@@ -1,4 +1,4 @@
-// PATH: lib/screens/chat_screen.dart
+// PATH: lib/screens/chat_screen.dart (UPDATED)
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -51,20 +51,29 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
-  Future<void> _initiateSharedActivity(String activityType) async {
-    // Create an activity session
+  Future<void> _initiateSharedExercise(String exerciseType) async {
+    // Create a shared activity session
     final activityRef = await FirebaseFirestore.instance
         .collection('chats')
         .doc(widget.chatId)
         .collection('activities')
         .add({
-      'type': activityType,
+      'type': exerciseType,
+      'exerciseType': exerciseType, // breathing, yoga, calm_video
       'initiatorId': _currentUserId,
       'status': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
       'participants': {
-        _currentUserId: {'completed': false, 'joinedAt': null, 'completedAt': null},
-        widget.friendId: {'completed': false, 'joinedAt': null, 'completedAt': null},
+        _currentUserId: {
+          'completed': false,
+          'joinedAt': null,
+          'completedAt': null,
+        },
+        widget.friendId: {
+          'completed': false,
+          'joinedAt': null,
+          'completedAt': null,
+        },
       },
     });
 
@@ -74,8 +83,8 @@ class _ChatScreenState extends State<ChatScreen> {
         .doc(widget.chatId)
         .collection('messages')
         .add({
-      'type': 'activity_invite',
-      'activityType': activityType,
+      'type': 'exercise_invite',
+      'exerciseType': exerciseType,
       'activityId': activityRef.id,
       'senderId': _currentUserId,
       'timestamp': FieldValue.serverTimestamp(),
@@ -96,7 +105,7 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  void _showActivityPicker() {
+  void _showExercisePicker() {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -133,34 +142,37 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
             ),
-            _buildActivityOption(
+            _buildExerciseOption(
               title: 'Breathing Exercise',
               subtitle: 'Box breathing - 2 minutes',
               icon: Icons.air,
               color: Colors.cyan,
+              exerciseType: 'breathing',
               onTap: () {
                 Navigator.pop(context);
-                _initiateSharedActivity('breathing');
+                _initiateSharedExercise('breathing');
               },
             ),
-            _buildActivityOption(
+            _buildExerciseOption(
               title: 'Yoga Session',
               subtitle: 'Gentle flow - 5 minutes',
               icon: Icons.self_improvement,
               color: Colors.purple,
+              exerciseType: 'yoga',
               onTap: () {
                 Navigator.pop(context);
-                _initiateSharedActivity('yoga');
+                _initiateSharedExercise('yoga');
               },
             ),
-            _buildActivityOption(
+            _buildExerciseOption(
               title: 'Calm Video',
-              subtitle: 'Watch together - 2 minutes',
+              subtitle: 'Guided meditation - 3 minutes',
               icon: Icons.play_circle,
               color: Colors.orange,
+              exerciseType: 'calm_video',
               onTap: () {
                 Navigator.pop(context);
-                _initiateSharedActivity('video');
+                _initiateSharedExercise('calm_video');
               },
             ),
             const SizedBox(height: 16),
@@ -170,11 +182,12 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildActivityOption({
+  Widget _buildExerciseOption({
     required String title,
     required String subtitle,
     required IconData icon,
     required Color color,
+    required String exerciseType,
     required VoidCallback onTap,
   }) {
     return InkWell(
@@ -291,7 +304,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Try doing a mental health exercise together',
+                          'Invite your friend to do an exercise together',
                           style: TextStyle(fontSize: 14, color: cs.onSurface.withOpacity(0.5)),
                         ),
                       ],
@@ -313,10 +326,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
                     if (type == 'text') {
                       return _buildTextMessage(message);
-                    } else if (type == 'activity_invite') {
-                      return _buildActivityInvite(message);
-                    } else if (type == 'activity_completed') {
-                      return _buildActivityCompleted(message);
+                    } else if (type == 'exercise_invite') {
+                      return _buildExerciseInvite(message);
+                    } else if (type == 'exercise_completed') {
+                      return _buildExerciseCompleted(message);
                     }
 
                     return const SizedBox.shrink();
@@ -326,7 +339,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
 
-          // Activity invite button - PROMINENT PLACEMENT
+          // Exercise invitation button - PROMINENT PLACEMENT
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -342,7 +355,7 @@ class _ChatScreenState extends State<ChatScreen> {
               width: double.infinity,
               height: 56,
               child: FilledButton.icon(
-                onPressed: _showActivityPicker,
+                onPressed: _showExercisePicker,
                 style: FilledButton.styleFrom(
                   backgroundColor: cs.primary,
                   shape: RoundedRectangleBorder(
@@ -351,7 +364,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 icon: const Icon(Icons.favorite_rounded),
                 label: const Text(
-                  'Do an exercise together',
+                  'Invite to exercise',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                 ),
               ),
@@ -441,8 +454,8 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildActivityInvite(Map<String, dynamic> message) {
-    final activityType = message['activityType'] as String;
+  Widget _buildExerciseInvite(Map<String, dynamic> message) {
+    final exerciseType = message['exerciseType'] as String;
     final activityId = message['activityId'] as String;
     final isMe = message['senderId'] == _currentUserId;
 
@@ -451,7 +464,7 @@ class _ChatScreenState extends State<ChatScreen> {
     String displayName;
     String duration;
 
-    switch (activityType) {
+    switch (exerciseType) {
       case 'breathing':
         icon = Icons.air;
         color = Colors.cyan;
@@ -464,16 +477,16 @@ class _ChatScreenState extends State<ChatScreen> {
         displayName = 'Yoga Session';
         duration = '5 min';
         break;
-      case 'video':
+      case 'calm_video':
         icon = Icons.play_circle;
         color = Colors.orange;
         displayName = 'Calm Video';
-        duration = '2 min';
+        duration = '3 min';
         break;
       default:
         icon = Icons.favorite;
         color = Colors.pink;
-        displayName = activityType;
+        displayName = exerciseType;
         duration = '2 min';
     }
 
@@ -500,8 +513,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   children: [
                     Text(
                       isMe 
-                          ? 'You invited $displayName' 
-                          : '${widget.friendName} invited $displayName',
+                          ? 'You invited: $displayName' 
+                          : '${widget.friendName} invited: $displayName',
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 15,
@@ -603,7 +616,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                        onPressed: () => _joinActivity(activityId, activityType),
+                        onPressed: () => _joinExercise(activityId, exerciseType),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: color,
                           foregroundColor: Colors.white,
@@ -612,7 +625,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             borderRadius: BorderRadius.circular(12),
                           ),
                         ),
-                        child: const Text('Start Activity'),
+                        child: const Text('Start Exercise'),
                       ),
                     ),
                   ],
@@ -657,7 +670,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildActivityCompleted(Map<String, dynamic> message) {
+  Widget _buildExerciseCompleted(Map<String, dynamic> message) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(12),
@@ -671,7 +684,7 @@ class _ChatScreenState extends State<ChatScreen> {
           Icon(Icons.celebration, color: Colors.green),
           SizedBox(width: 8),
           Text(
-            'Activity completed together! Streak +1 🔥',
+            'Exercise completed together! Streak +1 🔥',
             style: TextStyle(
               color: Colors.green,
               fontWeight: FontWeight.bold,
@@ -682,15 +695,15 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Future<void> _joinActivity(String activityId, String activityType) async {
-    // Navigate to the shared activity screen
+  Future<void> _joinExercise(String activityId, String exerciseType) async {
+    // Navigate to the shared exercise screen
     final completed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (context) => SharedActivityScreen(
+        builder: (context) => SharedExerciseScreen(
           chatId: widget.chatId,
           activityId: activityId,
-          activityType: activityType,
+          exerciseType: exerciseType,
           friendName: widget.friendName,
         ),
       ),
@@ -708,12 +721,12 @@ class _ChatScreenState extends State<ChatScreen> {
         'participants.$_currentUserId.completedAt': FieldValue.serverTimestamp(),
       });
 
-      // Check if both completed
-      await _checkBothCompleted(activityId);
+      // Check if both completed and increment streak
+      await _checkBothCompletedAndUpdateStreak(activityId);
     }
   }
 
-  Future<void> _checkBothCompleted(String activityId) async {
+  Future<void> _checkBothCompletedAndUpdateStreak(String activityId) async {
     final activityDoc = await FirebaseFirestore.instance
         .collection('chats')
         .doc(widget.chatId)
@@ -729,7 +742,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
 
     if (allCompleted) {
-      // Check if this is today's first completion for streak
+      // Increment streak
       final chatDoc = await FirebaseFirestore.instance
           .collection('chats')
           .doc(widget.chatId)
@@ -787,7 +800,7 @@ class _ChatScreenState extends State<ChatScreen> {
           .doc(widget.chatId)
           .collection('messages')
           .add({
-        'type': 'activity_completed',
+        'type': 'exercise_completed',
         'activityId': activityId,
         'timestamp': FieldValue.serverTimestamp(),
         'streakIncremented': shouldIncrementStreak,
@@ -827,15 +840,15 @@ class _ChatScreenState extends State<ChatScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
-                  'Friendship Stats',
+                  'Friendship Exercise Streak',
                   style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 24),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _buildStat('🔥', streak.toString(), 'Day Streak'),
-                    _buildStat('⭐', longestStreak.toString(), 'Longest'),
+                    _buildStreakStat('🔥', streak.toString(), 'Day Streak'),
+                    _buildStreakStat('⭐', longestStreak.toString(), 'Longest'),
                   ],
                 ),
                 const SizedBox(height: 24),
@@ -846,7 +859,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Text(
-                    'Complete mental health exercises together daily to grow your streak!',
+                    'Complete mental health exercises together daily to grow your streak! Choose from breathing exercises, yoga, or calm videos.',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 14),
                   ),
@@ -859,7 +872,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildStat(String emoji, String value, String label) {
+  Widget _buildStreakStat(String emoji, String value, String label) {
     return Column(
       children: [
         Text(emoji, style: const TextStyle(fontSize: 32)),
