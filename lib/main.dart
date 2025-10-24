@@ -387,13 +387,26 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     }
   }
 
+  // NEW: Get another suggestion with SAME inputs (different variation)
   void _getNewSuggestion() {
     setState(() {
       _suggestion = null;
       _extractedLink = null;
-      // Keep content type selected, just get new variation
+      // Keep content type and inputs, just get new variation
     });
     _getSuggestion();
+  }
+
+  // NEW: Clear everything and let user edit inputs
+  void _editAndStartOver() {
+    setState(() {
+      _suggestion = null;
+      _extractedLink = null;
+      _selectedContentType = null;
+      _suggestionIndex = 0; // Reset variation counter
+      _showContentTypeSelector = false;
+    });
+    // Don't auto-call _getSuggestion() - let user edit and click button again
   }
 
   Future<void> _openLink() async {
@@ -586,6 +599,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                         controller: _moodController,
                         textInputAction: TextInputAction.next,
                         style: const TextStyle(fontSize: 16),
+                        enabled: _suggestion == null, // NEW: Disable when showing suggestion
                         decoration: InputDecoration(
                           labelText: 'Your mood',
                           hintText: 'anxious, low, overwhelmed...',
@@ -604,6 +618,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                         minLines: 2,
                         maxLines: 3,
                         style: const TextStyle(fontSize: 16),
+                        enabled: _suggestion == null, // NEW: Disable when showing suggestion
                         decoration: InputDecoration(
                           labelText: 'What is nearby?',
                           hintText: 'candle, water, window, plant...',
@@ -654,7 +669,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                         child: _buildContentTypeSelector(cs: cs, isDark: isDark),
                       ),
 
-                    // Show result card with "Get Another" button
+                    // Show result card with action buttons
                     if (_suggestion != null)
                       FadeTransition(
                         opacity: _fadeAnimation,
@@ -662,18 +677,42 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                           children: [
                             _buildResultCard(isDark: isDark, cs: cs),
                             const SizedBox(height: 16),
-                            SizedBox(
-                              width: double.infinity,
-                              height: 54,
-                              child: OutlinedButton.icon(
-                                onPressed: _getNewSuggestion,
-                                style: OutlinedButton.styleFrom(
-                                  side: BorderSide(color: cs.primary.withOpacity(0.5)),
-                                  foregroundColor: cs.primary,
+                            
+                            // NEW: Two-button layout
+                            Row(
+                              children: [
+                                // Edit button - clears everything
+                                Expanded(
+                                  child: SizedBox(
+                                    height: 54,
+                                    child: OutlinedButton.icon(
+                                      onPressed: _editAndStartOver,
+                                      style: OutlinedButton.styleFrom(
+                                        side: BorderSide(color: cs.outline.withOpacity(0.5)),
+                                        foregroundColor: cs.onSurface,
+                                      ),
+                                      icon: const Icon(Icons.edit_rounded, size: 20),
+                                      label: const Text('Edit Inputs'),
+                                    ),
+                                  ),
                                 ),
-                                icon: const Icon(Icons.refresh_rounded),
-                                label: const Text('Get Another Suggestion'),
-                              ),
+                                const SizedBox(width: 12),
+                                // Get Another - keeps inputs, new variation
+                                Expanded(
+                                  child: SizedBox(
+                                    height: 54,
+                                    child: FilledButton.icon(
+                                      onPressed: _getNewSuggestion,
+                                      style: FilledButton.styleFrom(
+                                        backgroundColor: cs.primary,
+                                        foregroundColor: cs.onPrimary,
+                                      ),
+                                      icon: const Icon(Icons.refresh_rounded, size: 20),
+                                      label: const Text('Get Another'),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
