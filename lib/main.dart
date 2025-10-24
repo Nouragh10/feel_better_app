@@ -189,6 +189,10 @@ class FeelBetterApp extends StatelessWidget {
   }
 }
 
+// ============================================================================
+// SUGGESTION SCREEN
+// ============================================================================
+
 class SuggestionScreen extends StatefulWidget {
   const SuggestionScreen({super.key});
 
@@ -197,10 +201,12 @@ class SuggestionScreen extends StatefulWidget {
 }
 
 class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerProviderStateMixin {
+  // Controllers
   final TextEditingController _moodController = TextEditingController();
   final TextEditingController _itemsController = TextEditingController();
   final _fs = FirestoreService();
 
+  // State variables
   bool _loading = false;
   bool _saving = false;
   String? _suggestion;
@@ -208,8 +214,18 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   bool _shareWithFriends = true;
   bool _shareWithProvider = false;
 
+  // NEW: Variation system variables
+  int _suggestionIndex = 0;
+  String? _selectedContentType;
+  bool _showContentTypeSelector = false;
+
+  // Animation
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
+
+  // ============================================================================
+  // LIFECYCLE METHODS
+  // ============================================================================
 
   @override
   void initState() {
@@ -228,6 +244,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     _fadeController.dispose();
     super.dispose();
   }
+
+  // ============================================================================
+  // HELPER METHODS
+  // ============================================================================
 
   List<String> _parseItems(String raw) {
     return raw
@@ -250,49 +270,6 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     return uid;
   }
 
-  String? _extractLinkFromSuggestion(String suggestion) {
-    final urlRegex = RegExp(
-      r'https?://[^\s\)]+',
-      caseSensitive: false,
-    );
-    final match = urlRegex.firstMatch(suggestion);
-    return match?.group(0);
-  }
-
-  String? _generateLinkForSuggestion(String suggestion, String mood, List<String> items) {
-    final s = suggestion.toLowerCase();
-    final m = mood.toLowerCase();
-    
-    if (s.contains('play') || s.contains('listen') || s.contains('song')) {
-      final songMatch = RegExp(r'"([^"]+)"').firstMatch(suggestion);
-      if (songMatch != null) {
-        final songName = songMatch.group(1)!;
-        return 'https://www.google.com/search?q=${Uri.encodeComponent(songName)}';
-      }
-      
-      final yourMatch = RegExp(r'your\s+(?:go-to\s+)?(\w+)').firstMatch(s);
-      if (yourMatch != null) {
-        if (m.contains('sad') || m.contains('low') || m.contains('down')) {
-          return 'https://www.google.com/search?q=${Uri.encodeComponent('uplifting happy song')}';
-        } else if (m.contains('anx') || m.contains('tense') || m.contains('panic')) {
-          return 'https://www.google.com/search?q=${Uri.encodeComponent('calming relaxing song')}';
-        }
-      }
-      
-      return 'https://www.google.com/search?q=${Uri.encodeComponent('feel good music')}';
-    }
-    
-    if (s.contains('watch')) {
-      return 'https://www.youtube.com/results?search_query=${Uri.encodeComponent('calming video 2 minutes')}';
-    }
-    
-    if (s.contains('recipe') || s.contains('snack')) {
-      return 'https://www.google.com/search?q=${Uri.encodeComponent('quick 5 minute snack recipe')}';
-    }
-    
-    return null;
-  }
-
   String _cleanSuggestionText(String suggestion) {
     var cleaned = suggestion;
     cleaned = cleaned.replaceAll(
@@ -311,6 +288,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     return cleaned;
   }
 
+  // ============================================================================
+  // CORE SUGGESTION LOGIC
+  // ============================================================================
+
   Future<void> _getSuggestion() async {
     final mood = _moodController.text.trim();
     final items = _parseItems(_itemsController.text);
@@ -326,21 +307,38 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       return;
     }
 
-    // CRISIS CHECK FIRST - before showing loading or calling AI
+    // CRISIS CHECK FIRST
     final crisisCheck = OpenAIService.detectCrisis(mood: mood, items: items);
     if (crisisCheck.isCrisis) {
-      // Show crisis dialog instead of regular suggestion
       await CrisisAlertDialog.show(
         context,
         crisisCheck.safetyMessage ?? 'Please reach out for help',
         crisisCheck.hotlines,
       );
-      return; // Don't continue with regular suggestion
+      return;
+    }
+
+    // Check if user has phone/device nearby for content suggestions
+    final hasDevice = items.any((i) => 
+      i.toLowerCase().contains('phone') ||
+      i.toLowerCase().contains('laptop') ||
+      i.toLowerCase().contains('tablet') ||
+      i.toLowerCase().contains('computer')
+    );
+
+    // If device available and no content type selected yet, show selector
+    if (hasDevice && _selectedContentType == null && _suggestion == null) {
+      setState(() {
+        _showContentTypeSelector = true;
+        _fadeController.forward(from: 0);
+      });
+      return;
     }
 
     setState(() {
       _loading = true;
       _extractedLink = null;
+      _showContentTypeSelector = false;
     });
     
     try {
@@ -357,37 +355,45 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       }
 
       final apiKey = const String.fromEnvironment('OPENAI_API_KEY');
-      final result = await OpenAIService.suggest(
+      
+      // Generate suggestion with content type and variation index
+      final result = await OpenAIService.suggestWithVariation(
         apiKey: apiKey.isEmpty ? null : apiKey,
         mood: mood,
         items: items,
         userPreferences: prefs,
+        contentType: _selectedContentType,
+        variationIndex: _suggestionIndex,
       );
 
       if (!mounted) return;
       
-      var link = _extractLinkFromSuggestion(result);
-      
-      if (link == null) {
-        link = _generateLinkForSuggestion(result, mood, items);
-      }
-      
-      final cleanedSuggestion = _cleanSuggestionText(result);
+      final cleanedSuggestion = _cleanSuggestionText(result.suggestion);
       
       setState(() {
         _suggestion = cleanedSuggestion;
-        _extractedLink = link;
+        _extractedLink = result.linkUrl;
+        _suggestionIndex++; // Increment for next variation
       });
       _fadeController.forward(from: 0);
     } on TimeoutException {
       if (!mounted) return;
       setState(() => _suggestion = 'Network timeout—try again in a moment.');
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _suggestion = 'Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _getNewSuggestion() {
+    setState(() {
+      _suggestion = null;
+      _extractedLink = null;
+      // Keep content type selected, just get new variation
+    });
+    _getSuggestion();
   }
 
   Future<void> _openLink() async {
@@ -407,6 +413,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       );
     }
   }
+
+  // ============================================================================
+  // SAVE ENTRY LOGIC
+  // ============================================================================
 
   Future<void> _saveEntry() async {
     if (_suggestion == null) return;
@@ -495,6 +505,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       );
     }
   }
+
+  // ============================================================================
+  // BUILD METHOD
+  // ============================================================================
 
   @override
   Widget build(BuildContext context) {
@@ -600,41 +614,69 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
 
                     const SizedBox(height: 32),
 
-                    SizedBox(
-                      width: double.infinity,
-                      height: 60,
-                      child: FilledButton(
-                        onPressed: _loading ? null : _getSuggestion,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: cs.primary,
-                          foregroundColor: cs.onPrimary,
-                        ),
-                        child: _loading
-                            ? const SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2.5,
-                                  color: Colors.white,
+                    // Show initial button if no suggestion and no selector
+                    if (_suggestion == null && !_showContentTypeSelector)
+                      SizedBox(
+                        width: double.infinity,
+                        height: 60,
+                        child: FilledButton(
+                          onPressed: _loading ? null : _getSuggestion,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: cs.primary,
+                            foregroundColor: cs.onPrimary,
+                          ),
+                          child: _loading
+                              ? const SizedBox(
+                                  width: 24,
+                                  height: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: const [
+                                    Icon(Icons.auto_awesome_rounded, size: 22),
+                                    SizedBox(width: 12),
+                                    Text('Get your suggestion'),
+                                  ],
                                 ),
-                              )
-                            : Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: const [
-                                  Icon(Icons.auto_awesome_rounded, size: 22),
-                                  SizedBox(width: 12),
-                                  Text('Get your suggestion'),
-                                ],
-                              ),
+                        ),
                       ),
-                    ),
 
                     const SizedBox(height: 40),
 
+                    // Show content type selector
+                    if (_showContentTypeSelector)
+                      FadeTransition(
+                        opacity: _fadeAnimation,
+                        child: _buildContentTypeSelector(cs: cs, isDark: isDark),
+                      ),
+
+                    // Show result card with "Get Another" button
                     if (_suggestion != null)
                       FadeTransition(
                         opacity: _fadeAnimation,
-                        child: _buildResultCard(isDark: isDark, cs: cs),
+                        child: Column(
+                          children: [
+                            _buildResultCard(isDark: isDark, cs: cs),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 54,
+                              child: OutlinedButton.icon(
+                                onPressed: _getNewSuggestion,
+                                style: OutlinedButton.styleFrom(
+                                  side: BorderSide(color: cs.primary.withOpacity(0.5)),
+                                  foregroundColor: cs.primary,
+                                ),
+                                icon: const Icon(Icons.refresh_rounded),
+                                label: const Text('Get Another Suggestion'),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                   ],
                 ),
@@ -645,6 +687,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       ),
     );
   }
+
+  // ============================================================================
+  // UI BUILDING METHODS
+  // ============================================================================
 
   Widget _buildGlassCard({
     required bool isDark,
@@ -828,6 +874,193 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildContentTypeSelector({required ColorScheme cs, required bool isDark}) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [kGlassDark.withOpacity(0.7), kGlassDark.withOpacity(0.5)]
+              : [kGlassLight.withOpacity(0.9), kGlassLight.withOpacity(0.7)],
+        ),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: cs.primary.withOpacity(0.3), width: 2),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 32,
+            spreadRadius: -4,
+            offset: const Offset(0, 12),
+            color: cs.primary.withOpacity(0.15),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: [cs.primary, cs.secondary]),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.tune_rounded, color: Colors.white, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'What would you like to do?',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: cs.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          
+          _buildContentTypeOption(
+            cs: cs,
+            isDark: isDark,
+            icon: Icons.music_note_rounded,
+            title: 'Listen to a Song',
+            description: 'Calming or uplifting music',
+            onTap: () {
+              setState(() => _selectedContentType = 'song');
+              _getSuggestion();
+            },
+          ),
+          const SizedBox(height: 12),
+          
+          _buildContentTypeOption(
+            cs: cs,
+            isDark: isDark,
+            icon: Icons.podcasts_rounded,
+            title: 'Listen to a Podcast',
+            description: 'Short audio content',
+            onTap: () {
+              setState(() => _selectedContentType = 'podcast');
+              _getSuggestion();
+            },
+          ),
+          const SizedBox(height: 12),
+          
+          _buildContentTypeOption(
+            cs: cs,
+            isDark: isDark,
+            icon: Icons.play_circle_outline_rounded,
+            title: 'Watch a Video',
+            description: 'Guided meditation or relaxation',
+            onTap: () {
+              setState(() => _selectedContentType = 'video');
+              _getSuggestion();
+            },
+          ),
+          const SizedBox(height: 12),
+          
+          _buildContentTypeOption(
+            cs: cs,
+            isDark: isDark,
+            icon: Icons.self_improvement_rounded,
+            title: 'Do an Exercise',
+            description: 'Breathing or grounding technique',
+            onTap: () {
+              setState(() => _selectedContentType = 'exercise');
+              _getSuggestion();
+            },
+          ),
+          
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () {
+                setState(() {
+                  _showContentTypeSelector = false;
+                  _selectedContentType = null;
+                });
+              },
+              child: const Text('Cancel'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildContentTypeOption({
+    required ColorScheme cs,
+    required bool isDark,
+    required IconData icon,
+    required String title,
+    required String description,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isDark
+              ? Colors.white.withOpacity(0.05)
+              : Colors.black.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isDark
+                ? Colors.white.withOpacity(0.1)
+                : Colors.black.withOpacity(0.1),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [cs.primary, cs.secondary]),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: Colors.white, size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    description,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: cs.onSurface.withOpacity(0.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_rounded,
+              color: cs.onSurface.withOpacity(0.3),
+              size: 20,
+            ),
+          ],
+        ),
       ),
     );
   }

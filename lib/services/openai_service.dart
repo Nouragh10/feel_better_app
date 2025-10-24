@@ -5,8 +5,6 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 
-
-
 class CrisisDetectionResult {
   final bool isCrisis;
   final String? safetyMessage;
@@ -41,7 +39,6 @@ enum _MoodCat {
 }
 
 class OpenAIService {
-
 
   static CrisisDetectionResult detectCrisis({
     required String mood,
@@ -145,8 +142,409 @@ class OpenAIService {
     buffer.writeln('You are not alone. Help is available 24/7.');
     return buffer.toString();
   }
+
   // ---------------------------------------------------------------------------
-  // PUBLIC API
+  // NEW: Variation-based suggestion system
+  // ---------------------------------------------------------------------------
+
+  static Future<SuggestionWithLink> suggestWithVariation({
+    String? apiKey,
+    required String mood,
+    required List<String> items,
+    Map<String, String>? userPreferences,
+    String? contentType,
+    int variationIndex = 0,
+  }) async {
+    final prefs = userPreferences ?? {};
+    
+    // If no content type specified, default based on mood and items
+    final effectiveContentType = contentType ?? _inferContentType(mood, items);
+    
+    switch (effectiveContentType) {
+      case 'song':
+        return _generateSongSuggestion(
+          mood: mood,
+          items: items,
+          prefs: prefs,
+          variationIndex: variationIndex,
+          apiKey: apiKey,
+        );
+      case 'podcast':
+        return _generatePodcastSuggestion(
+          mood: mood,
+          items: items,
+          prefs: prefs,
+          variationIndex: variationIndex,
+          apiKey: apiKey,
+        );
+      case 'video':
+        return _generateVideoSuggestion(
+          mood: mood,
+          items: items,
+          prefs: prefs,
+          variationIndex: variationIndex,
+          apiKey: apiKey,
+        );
+      case 'exercise':
+        return _generateExerciseSuggestion(
+          mood: mood,
+          items: items,
+          prefs: prefs,
+          variationIndex: variationIndex,
+          apiKey: apiKey,
+        );
+      default:
+        return _generateExerciseSuggestion(
+          mood: mood,
+          items: items,
+          prefs: prefs,
+          variationIndex: variationIndex,
+          apiKey: apiKey,
+        );
+    }
+  }
+
+  static String _inferContentType(String mood, List<String> items) {
+    final m = mood.toLowerCase();
+    final hasDevice = items.any((i) => 
+      i.toLowerCase().contains('phone') ||
+      i.toLowerCase().contains('laptop') ||
+      i.toLowerCase().contains('tablet')
+    );
+    
+    if (!hasDevice) return 'exercise';
+    
+    if (_hasAny(m, ['anx', 'panic', 'tense'])) return 'video';
+    if (_hasAny(m, ['low', 'sad', 'down'])) return 'song';
+    if (_hasAny(m, ['overwhelm', 'stress'])) return 'podcast';
+    
+    return 'exercise';
+  }
+
+  static Future<SuggestionWithLink> _generateSongSuggestion({
+    required String mood,
+    required List<String> items,
+    required Map<String, String> prefs,
+    required int variationIndex,
+    String? apiKey,
+  }) async {
+    final device = items.firstWhere(
+      (i) => i.toLowerCase().contains('phone') || 
+             i.toLowerCase().contains('tablet') ||
+             i.toLowerCase().contains('laptop'),
+      orElse: () => 'phone',
+    );
+    
+    final moodLower = mood.toLowerCase();
+    final isAnxious = _hasAny(moodLower, ['anx', 'nervous', 'panic', 'tense']);
+    final isSad = _hasAny(moodLower, ['sad', 'low', 'down', 'blue']);
+    
+    // Get user's favorite song based on mood
+    String? favoriteSong;
+    if (isAnxious) {
+      favoriteSong = prefs['favoriteSongAnxious'];
+    } else if (isSad) {
+      favoriteSong = prefs['favoriteSongSad'];
+    }
+    
+    String suggestion;
+    String? link;
+    
+    // Variation 0: Use favorite song if available
+    if (variationIndex == 0 && favoriteSong != null && favoriteSong.isNotEmpty) {
+      suggestion = 'On your $device, play "$favoriteSong" and take slow breaths for 2 minutes.';
+      link = _musicSearch(favoriteSong);
+    }
+    // Variation 1+: Generate similar songs or alternatives
+    else if (apiKey != null && apiKey.isNotEmpty) {
+      final similarSong = await _getSimilarSong(
+        apiKey: apiKey,
+        mood: mood,
+        favoriteSong: favoriteSong,
+        variationIndex: variationIndex,
+      );
+      suggestion = 'On your $device, play "$similarSong" and let the music ease your mind for 2 minutes.';
+      link = _musicSearch(similarSong);
+    }
+    // Fallback: Genre-based suggestions
+    else {
+      final genre = _getSongGenre(mood, variationIndex);
+      suggestion = 'On your $device, play a $genre song for 2 minutes and breathe with the rhythm.';
+      link = _musicSearch('$genre music 2 minutes');
+    }
+    
+    return SuggestionWithLink(suggestion: suggestion, linkUrl: link);
+  }
+
+  static Future<String> _getSimilarSong({
+    required String apiKey,
+    required String mood,
+    String? favoriteSong,
+    required int variationIndex,
+  }) async {
+    final prompt = favoriteSong != null
+        ? '''You are a music recommendation expert. The user likes "$favoriteSong" when feeling $mood.
+Suggest ONE similar song (artist - title format) that has a similar vibe or genre. 
+Make it different from the favorite but emotionally aligned.
+Variation #$variationIndex - suggest something unique.
+Return ONLY the song name in format: "Artist - Song Title"'''
+        : '''Suggest ONE ${mood.toLowerCase()} song that would help someone feeling $mood.
+Variation #$variationIndex - make each suggestion unique.
+Return ONLY the song name in format: "Artist - Song Title"''';
+
+    try {
+      final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
+      final response = await http.post(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $apiKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'model': 'gpt-4o-mini',
+          'temperature': 0.8 + (variationIndex * 0.1).clamp(0, 0.5),
+          'messages': [
+            {'role': 'system', 'content': 'You are a music expert. Return only song names.'},
+            {'role': 'user', 'content': prompt},
+          ],
+        }),
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final content = data['choices'][0]['message']['content'] as String;
+        return content.trim().replaceAll('"', '');
+      }
+    } catch (_) {}
+    
+    return _getSongGenre(mood, variationIndex);
+  }
+
+  static String _getSongGenre(String mood, int variationIndex) {
+    final moodLower = mood.toLowerCase();
+    
+    if (_hasAny(moodLower, ['anx', 'nervous', 'panic'])) {
+      final options = ['calming piano', 'ambient meditation', 'lo-fi chill', 'nature sounds'];
+      return options[variationIndex % options.length];
+    }
+    if (_hasAny(moodLower, ['sad', 'low', 'down'])) {
+      final options = ['uplifting pop', 'feel-good indie', 'happy acoustic', 'motivational'];
+      return options[variationIndex % options.length];
+    }
+    if (_hasAny(moodLower, ['angry', 'frustrat'])) {
+      final options = ['energetic workout', 'empowering rock', 'intense electronic', 'powerful indie'];
+      return options[variationIndex % options.length];
+    }
+    
+    final options = ['peaceful instrumental', 'gentle acoustic', 'soothing jazz', 'calm classical'];
+    return options[variationIndex % options.length];
+  }
+
+  static Future<SuggestionWithLink> _generatePodcastSuggestion({
+    required String mood,
+    required List<String> items,
+    required Map<String, String> prefs,
+    required int variationIndex,
+    String? apiKey,
+  }) async {
+    final device = items.firstWhere(
+      (i) => i.toLowerCase().contains('phone') || 
+             i.toLowerCase().contains('tablet'),
+      orElse: () => 'phone',
+    );
+    
+    final favoritePodcast = prefs['favoritePodcast'];
+    
+    String suggestion;
+    String? link;
+    
+    // Variation 0: Use favorite podcast
+    if (variationIndex == 0 && favoritePodcast != null && favoritePodcast.isNotEmpty) {
+      suggestion = 'On your $device, listen to a 5-minute segment from "$favoritePodcast".';
+      link = _ytSearch(favoritePodcast);
+    }
+    // Variation 1+: Similar podcasts or topics
+    else if (apiKey != null && apiKey.isNotEmpty) {
+      final topic = await _getSimilarPodcast(
+        apiKey: apiKey,
+        mood: mood,
+        favoritePodcast: favoritePodcast,
+        variationIndex: variationIndex,
+      );
+      suggestion = 'On your $device, listen to a short podcast about $topic for 5 minutes.';
+      link = _ytSearch('$topic podcast 5 minutes');
+    }
+    // Fallback
+    else {
+      final topics = ['mindfulness', 'motivation', 'positive psychology', 'self-care', 'gratitude'];
+      final topic = topics[variationIndex % topics.length];
+      suggestion = 'On your $device, listen to a $topic podcast for 5 minutes.';
+      link = _ytSearch('$topic podcast short');
+    }
+    
+    return SuggestionWithLink(suggestion: suggestion, linkUrl: link);
+  }
+
+  static Future<String> _getSimilarPodcast({
+    required String apiKey,
+    required String mood,
+    String? favoritePodcast,
+    required int variationIndex,
+  }) async {
+    final prompt = favoritePodcast != null
+        ? '''The user likes "$favoritePodcast" podcast. Suggest ONE similar podcast topic or theme that would help with feeling $mood.
+Variation #$variationIndex.
+Return ONLY a short topic name (2-4 words).'''
+        : '''Suggest ONE podcast topic that would help someone feeling $mood.
+Variation #$variationIndex.
+Return ONLY a short topic name (2-4 words).''';
+
+    try {
+      final uri = Uri.parse('https://api.openai.com/v1/chat/completions');
+      final response = await http.post(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $apiKey',
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'model': 'gpt-4o-mini',
+          'temperature': 0.8,
+          'messages': [
+            {'role': 'user', 'content': prompt},
+          ],
+        }),
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return (data['choices'][0]['message']['content'] as String).trim();
+      }
+    } catch (_) {}
+    
+    return 'mindfulness and calm';
+  }
+
+  static Future<SuggestionWithLink> _generateVideoSuggestion({
+    required String mood,
+    required List<String> items,
+    required Map<String, String> prefs,
+    required int variationIndex,
+    String? apiKey,
+  }) async {
+    final device = items.firstWhere(
+      (i) => i.toLowerCase().contains('phone') || 
+             i.toLowerCase().contains('tablet') ||
+             i.toLowerCase().contains('laptop'),
+      orElse: () => 'phone',
+    );
+    
+    final moodLower = mood.toLowerCase();
+    final videos = <String>[];
+    
+    if (_hasAny(moodLower, ['anx', 'panic', 'tense'])) {
+      videos.addAll([
+        'guided box breathing 2 minutes',
+        '4-7-8 breathing technique meditation',
+        'anxiety relief grounding exercise',
+        'calm your nervous system meditation',
+        'quick anxiety reset meditation',
+      ]);
+    } else if (_hasAny(moodLower, ['sad', 'low', 'down'])) {
+      videos.addAll([
+        'uplifting nature scenes 2 minutes',
+        'mood boost visualization meditation',
+        'gratitude meditation short',
+        'feel good affirmations video',
+        'happy peaceful nature video',
+      ]);
+    } else if (_hasAny(moodLower, ['overwhelm', 'stress'])) {
+      videos.addAll([
+        'stress relief meditation 3 minutes',
+        'calm visualization exercise',
+        'progressive muscle relaxation short',
+        'grounding meditation for overwhelm',
+        'peaceful nature meditation',
+      ]);
+    } else {
+      videos.addAll([
+        'mindfulness meditation 2 minutes',
+        'calming nature scenes',
+        'peaceful breathing exercise',
+        'gentle relaxation video',
+        'quiet meditation practice',
+      ]);
+    }
+    
+    final videoQuery = videos[variationIndex % videos.length];
+    final suggestion = 'On your $device, watch a $videoQuery video and follow along.';
+    final link = _ytSearch(videoQuery);
+    
+    return SuggestionWithLink(suggestion: suggestion, linkUrl: link);
+  }
+
+  static Future<SuggestionWithLink> _generateExerciseSuggestion({
+    required String mood,
+    required List<String> items,
+    required Map<String, String> prefs,
+    required int variationIndex,
+    String? apiKey,
+  }) async {
+    final item = items.isNotEmpty ? items.first : 'something nearby';
+    final moodLower = mood.toLowerCase();
+    
+    final exercises = <String>[];
+    
+    // Build exercise pool based on mood
+    if (_hasAny(moodLower, ['anx', 'panic', 'tense'])) {
+      exercises.addAll([
+        'Hold the $item and count 10 slow breaths, focusing only on the exhale.',
+        'Trace the outline of the $item with your finger for 5 cycles while breathing slowly.',
+        'Place the $item in your palm and describe 3 textures you feel, then take 5 deep breaths.',
+        'Hold the $item and name 5 things you see, 4 you hear, 3 you can touch.',
+        'Press the $item gently between your hands and breathe in for 4, hold for 4, out for 6.',
+      ]);
+    } else if (_hasAny(moodLower, ['sad', 'low', 'down'])) {
+      exercises.addAll([
+        'Look at the $item and list 3 memories it reminds you of, then smile.',
+        'Hold the $item and think of one person you\'re grateful for while taking 5 deep breaths.',
+        'Place the $item somewhere visible and do 10 gentle shoulder rolls.',
+        'Touch the $item and say out loud: "This moment is temporary. I am stronger than I feel."',
+        'With the $item nearby, write down 3 tiny things that went okay today.',
+      ]);
+    } else if (_hasAny(moodLower, ['angry', 'frustrat'])) {
+      exercises.addAll([
+        'Squeeze the $item tightly for 5 seconds, then release. Repeat 5 times with slow breaths.',
+        'Place the $item down firmly, then shake your hands vigorously for 20 seconds.',
+        'Hold the $item and tense every muscle for 5 seconds, then release completely.',
+        'Put the $item aside, then do 10 jumping jacks and 5 slow breaths.',
+        'With the $item in view, clench your jaw, hold for 3 seconds, release. Repeat 5 times.',
+      ]);
+    } else if (_hasAny(moodLower, ['overwhelm', 'stress'])) {
+      exercises.addAll([
+        'Set the $item in front of you. Organize or tidy 5 small things nearby, then stop.',
+        'Touch the $item and list the smallest next step you can take today. Just one.',
+        'Hold the $item and break down your biggest worry into 3 tiny pieces.',
+        'With the $item nearby, write "I can only control this moment" 3 times.',
+        'Place the $item aside and do a 2-minute brain dump - write every thought, no filter.',
+      ]);
+    } else {
+      exercises.addAll([
+        'Hold the $item for 1 minute and notice its temperature, weight, and texture.',
+        'Place the $item on a surface and tap it gently 10 times while breathing slowly.',
+        'With the $item in hand, stretch your arms up high, then relax. Repeat 3 times.',
+        'Look at the $item and describe its color in 5 different ways.',
+        'Touch the $item and count backwards from 20, taking one breath per number.',
+      ]);
+    }
+    
+    final suggestion = exercises[variationIndex % exercises.length];
+    
+    return SuggestionWithLink(suggestion: suggestion, linkUrl: null);
+  }
+
+  // ---------------------------------------------------------------------------
+  // LEGACY API (backward compatible)
   // ---------------------------------------------------------------------------
 
   /// Back-compat for older callers (returns only text).
@@ -157,13 +555,11 @@ class OpenAIService {
     String? uid,
     Map<String, String>? userPreferences,
   }) async {
-    // ADD THIS CRISIS CHECK at the very beginning:
     final crisisCheck = detectCrisis(mood: mood, items: items);
     if (crisisCheck.isCrisis) {
       return _formatCrisisResponse(crisisCheck);
     }
     
-    // Then continue with your existing code...
     final r = await suggestWithLink(
       apiKey: apiKey,
       mood: mood,
@@ -200,7 +596,6 @@ class OpenAIService {
   }
 
   /// Returns up to [n] diverse suggestions with links (used for "redo" pool).
-  /// [nonce] is a salt to encourage variety across repeated calls.
   static Future<List<SuggestionWithLink>> suggestBatchWithLinks({
     String? apiKey,
     required String mood,
@@ -212,10 +607,8 @@ class OpenAIService {
   }) async {
     n = (n <= 0) ? 1 : (n > 5 ? 5 : n);
 
-    // Read prefs once for personalization.
     Map<String, dynamic>? prefs;
     
-    // Use passed userPreferences if available, otherwise try to fetch from Firestore
     if (userPreferences != null && userPreferences.isNotEmpty) {
       prefs = Map<String, dynamic>.from(userPreferences);
     } else if (uid != null) {
@@ -239,7 +632,6 @@ class OpenAIService {
 
     List<String> texts;
     if ((apiKey ?? '').isEmpty) {
-      // Offline fallback batch
       texts = _localSuggestionBatch(
         mood: mood,
         items: items,
@@ -250,7 +642,6 @@ class OpenAIService {
         userPreferences: prefs,
       );
     } else {
-      // Online batch (robust plain-text format; no JSON parsing surprises)
       texts = await _onlineSuggestionBatch(
         apiKey: apiKey!,
         mood: mood,
@@ -263,7 +654,6 @@ class OpenAIService {
         userPreferences: prefs,
       );
 
-      // If model returns nothing, fall back to local.
       if (texts.isEmpty) {
         texts = _localSuggestionBatch(
           mood: mood,
@@ -277,10 +667,8 @@ class OpenAIService {
       }
     }
 
-    // Enforce: every suggestion must mention an item.
     texts = texts.map((s) => _ensureItemMention(s, items)).toList();
 
-    // Build links per suggestion.
     final out = <SuggestionWithLink>[];
     for (final t in texts) {
       final link = _personalizedLink(
@@ -314,7 +702,6 @@ class OpenAIService {
     final near = (items.isNotEmpty ? items.join(', ') : 'something nearby');
     final nonceText = (nonce == null) ? '' : '\nNonce: $nonce';
 
-    // Build user preferences context
     String prefsContext = '';
     if (userPreferences != null && userPreferences.isNotEmpty) {
       prefsContext = '\n\nUser preferences (incorporate when relevant):';
@@ -341,8 +728,6 @@ class OpenAIService {
       }
     }
 
-    // We ask the model for "exactly N lines, each starting with '- '", so we can
-    // reliably split without JSON parsing issues.
     final prompt = '''
 You're a brief behavioral activation coach. The user gives a feeling and nearby items.
 Return EXACTLY $n unique, tiny, safe, highly doable tasks (<= 2 short sentences each).
@@ -375,10 +760,9 @@ Now output exactly $n lines, each starting with "- ".
       'Content-Type': 'application/json',
     };
 
-    // Small temp jitter if a nonce is present (encourages variety run-to-run).
     final double baseTemp = 0.7;
     final double jitter =
-        (nonce == null) ? 0.0 : ((nonce % 3) - 1) * 0.05; // -0.05, 0, +0.05
+        (nonce == null) ? 0.0 : ((nonce % 3) - 1) * 0.05;
     final double temp = (baseTemp + jitter).clamp(0.2, 1.0);
 
     final body = jsonEncode({
@@ -416,7 +800,6 @@ Now output exactly $n lines, each starting with "- ".
         return <String>[];
       }
 
-      // Parse "- " lines, trim, unique, non-empty.
       final lines = content
           .split('\n')
           .map((s) => s.trim())
@@ -425,7 +808,6 @@ Now output exactly $n lines, each starting with "- ".
           .where((s) => s.isNotEmpty)
           .toList();
 
-      // Deduplicate while preserving order.
       final seen = <String>{};
       final out = <String>[];
       for (final l in lines) {
@@ -435,7 +817,6 @@ Now output exactly $n lines, each starting with "- ".
           out.add(l);
         }
       }
-      // Clip to requested n.
       return out.length > n ? out.sublist(0, n) : out;
     } on TimeoutException {
       return <String>[];
@@ -459,12 +840,10 @@ Now output exactly $n lines, each starting with "- ".
   }) {
     final base = <String>[];
 
-    // Prefer an item-specific action first when a physical (non-enabler) item exists.
     final thing = items.isNotEmpty ? items.first.trim() : '';
     if (thing.isNotEmpty && !_isEnabler(thing)) {
       base.addAll(_itemActionVariants(thing));
     } else {
-      // No good physical item → seed with generic single suggestion.
       base.add(_localSuggestion(
         mood,
         items,
@@ -476,27 +855,22 @@ Now output exactly $n lines, each starting with "- ".
 
     final m = mood.toLowerCase();
 
-    // Check for user preferences and incorporate them
     if (userPreferences != null) {
-      // Phone + sad mood + favorite song
       final hasPhone = items.any((i) => i.toLowerCase().contains('phone'));
       if (hasPhone && _hasAny(m, ['sad', 'low', 'down']) && userPreferences['favoriteSongSad'] != null) {
         final song = userPreferences['favoriteSongSad'];
         base.add('On your phone, play "$song" - your go-to song when feeling low.');
       }
-      // Phone + anxious mood + calming song
       if (hasPhone && _hasAny(m, ['anx', 'nervous', 'panic', 'tense']) && userPreferences['favoriteSongAnxious'] != null) {
         final song = userPreferences['favoriteSongAnxious'];
         base.add('On your phone, play "$song" - your calming song.');
       }
-      // Go-to activity
       if (userPreferences['goToActivity'] != null) {
         final activity = userPreferences['goToActivity'];
         base.add('Try $activity for 2 minutes - your go-to activity.');
       }
     }
 
-    // Hungry → diversify with snack/recipe variants only.
     if (_hasAny(m, ['hungry', 'hangry', 'starv', 'snack', 'food', 'eat'])) {
       base.addAll([
         'Open a 5-minute snack recipe and prepare just the first step.',
@@ -504,7 +878,6 @@ Now output exactly $n lines, each starting with "- ".
         'Make a quick toast or fruit snack and notice the temperature and texture for 30 seconds.',
       ]);
     } else if (_wantsListen(userText: m) || thing.contains('headphone') || _isEnabler(thing)) {
-      // Device-based listening variants.
       final device = thing.isEmpty ? 'phone' : thing;
       base.addAll([
         'On your $device, put on a calm song for one minute and breathe with the rhythm.',
@@ -555,7 +928,6 @@ Now output exactly $n lines, each starting with "- ".
       ]);
     }
 
-    // If a nonce is provided, rotate the list deterministically to vary ordering.
     if (nonce != null && base.length > 1) {
       final k = nonce.abs() % base.length;
       final rotated = [...base.sublist(k), ...base.sublist(0, k)];
@@ -564,7 +936,6 @@ Now output exactly $n lines, each starting with "- ".
         ..addAll(rotated);
     }
 
-    // Deduplicate and clip to n.
     final seen = <String>{};
     final out = <String>[];
     for (final s in base) {
@@ -576,16 +947,13 @@ Now output exactly $n lines, each starting with "- ".
       if (out.length >= n) break;
     }
 
-    // As a last resort, pad with generic tiny actions.
     while (out.length < n) {
       out.add('Take five slow breaths and relax your shoulders.');
     }
 
-    // Enforce: every suggestion must mention an item.
     return out.map((s) => _ensureItemMention(s, items)).toList();
   }
 
-  /// Single offline suggestion used as building block.
   static String _localSuggestion(
     String mood,
     List<String> items, {
@@ -596,7 +964,6 @@ Now output exactly $n lines, each starting with "- ".
     final thing = items.isNotEmpty ? items.first : 'something nearby';
     final m = mood.toLowerCase();
 
-    // Check for phone and user preferences first
     final hasPhone = items.any((i) => i.toLowerCase().contains('phone'));
     if (hasPhone && userPreferences != null) {
       if (_hasAny(m, ['sad', 'low', 'down']) && userPreferences['favoriteSongSad'] != null) {
@@ -694,12 +1061,10 @@ Now output exactly $n lines, each starting with "- ".
 
     final cat = _classifyMood(userText);
 
-    // Hungry ALWAYS → recipe link.
     if (cat == _MoodCat.hungry) {
       return _webSearch('quick easy 5 minute recipe healthy snack');
     }
 
-    // SONG preference.
     if (preferSong) {
       switch (cat) {
         case _MoodCat.anxious:
@@ -745,7 +1110,6 @@ Now output exactly $n lines, each starting with "- ".
       }
     }
 
-    // PODCAST preference.
     if (preferPodcast) {
       final fav = (prefs?['favoritePodcast'] as String?)?.trim();
       return (fav != null && fav.isNotEmpty)
@@ -755,7 +1119,6 @@ Now output exactly $n lines, each starting with "- ".
           : _ytSearch('short uplifting podcast 5 minutes');
     }
 
-    // WATCH preference / fallback.
     if (wantsWatch) {
       switch (cat) {
         case _MoodCat.anxious:
@@ -780,7 +1143,6 @@ Now output exactly $n lines, each starting with "- ".
       }
     }
 
-    // No clear signal → if headphones nearby, lean music; else no link.
     if (hasHeadphones) {
       return _prefOrSearch(
         _pickFirstNonEmpty([
@@ -804,7 +1166,7 @@ Now output exactly $n lines, each starting with "- ".
     }
     return _mediaLinkFromPref(v,
         fallbackQuery: fallback, defaultService: defaultService);
-    }
+  }
 
   static String _sanitize(String s) {
     final t = s.replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -876,7 +1238,6 @@ Now output exactly $n lines, each starting with "- ".
     final item = itemRaw.toLowerCase();
     String i(String s) => s.replaceAll('\$item', itemRaw);
 
-    // Simple mapping with 1–2 concrete actions per common item.
     final map = <String, List<String>>{
       'candle': [
         i('Hold the \$item and trace its outline with your finger for 5 slow breaths.'),
@@ -916,19 +1277,16 @@ Now output exactly $n lines, each starting with "- ".
     for (final key in map.keys) {
       if (item.contains(key)) return map[key]!;
     }
-    // Unknown item → generic but still item-referencing.
     return [
       i('Hold the \$item and trace its outline for 5 slow breaths.'),
     ];
   }
 
-  // Ensures the text mentions at least one item; if not, prefixes with the first item.
   static String _ensureItemMention(String text, List<String> items) {
     if (items.isEmpty) return text;
     if (_mentionsAny(text, items)) return text;
     final item = items.first.trim();
     if (item.isEmpty) return text;
-    // Lowercase first letter of the original sentence when we prefix to keep it flowing.
     String lowerFirst(String s) =>
         s.isEmpty ? s : s[0].toLowerCase() + s.substring(1);
     return 'With the $item, ${lowerFirst(text)}';
@@ -939,7 +1297,6 @@ Now output exactly $n lines, each starting with "- ".
     for (final raw in items) {
       final w = raw.trim().toLowerCase();
       if (w.isEmpty) continue;
-      // word-boundary-ish match to avoid partials
       if (RegExp(r'(^|[^a-z])' + RegExp.escape(w) + r'([^a-z]|$)').hasMatch(t)) {
         return true;
       }
