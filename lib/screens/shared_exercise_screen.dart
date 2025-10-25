@@ -1,5 +1,6 @@
 // PATH: lib/screens/shared_exercise_screen.dart
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../widgets/action_timer.dart';
 
@@ -54,28 +55,28 @@ class _SharedExerciseScreenState extends State<SharedExerciseScreen> {
 
   String get _instructions => switch (widget.exerciseType) {
         'breathing' =>
-            'We’ll do a simple 4-4-4-4 box breath together.\n\n'
-            '• Inhale through your nose for 4 counts\n'
-            '• Hold for 4\n'
-            '• Exhale through your mouth for 4\n'
-            '• Hold for 4\n\n'
-            'Repeat gently. If anything feels uncomfortable, return to natural breathing.',
+            "We'll do a simple 4-4-4-4 box breath together.\n\n"
+            "• Inhale through your nose for 4 counts\n"
+            "• Hold for 4\n"
+            "• Exhale through your mouth for 4\n"
+            "• Hold for 4\n\n"
+            "Repeat gently. If anything feels uncomfortable, return to natural breathing.",
         'yoga' =>
-            'We’ll flow through a gentle mini-sequence:\n\n'
-            '• Neck rolls (30s)\n'
-            '• Shoulder circles (30s)\n'
-            '• Cat/Cow (1 min)\n'
-            '• Child’s Pose (1 min)\n'
-            '• Seated forward fold (1 min)\n\n'
-            'Move within your comfort. Stop if you feel any pain.',
+            "We'll flow through a gentle mini-sequence:\n\n"
+            "• Neck rolls (30s)\n"
+            "• Shoulder circles (30s)\n"
+            "• Cat/Cow (1 min)\n"
+            "• Child's Pose (1 min)\n"
+            "• Seated forward fold (1 min)\n\n"
+            "Move within your comfort. Stop if you feel any pain.",
         'calm_video' =>
-            'We’ll watch a short calming clip together.\n\n'
-            '• Settle into a comfy position\n'
-            '• Let your shoulders drop\n'
-            '• Notice one soothing detail in the video: colors, sounds, or pace\n\n'
-            'Breathe slowly as you watch.',
+            "We'll watch a short calming clip together.\n\n"
+            "• Settle into a comfy position\n"
+            "• Let your shoulders drop\n"
+            "• Notice one soothing detail in the video: colors, sounds, or pace\n\n"
+            "Breathe slowly as you watch.",
         _ =>
-            'Do this short exercise at a gentle pace. You can finish early if needed.',
+            "Do this short exercise at a gentle pace. You can finish early if needed.",
       };
 
   Future<void> _complete() async {
@@ -89,6 +90,26 @@ class _SharedExerciseScreenState extends State<SharedExerciseScreen> {
     }
   }
 
+  Future<void> _openVideo() async {
+    // Generate a search URL for calming video
+    final query = 'calming video 3 minutes meditation relaxing';
+    final url = 'https://www.youtube.com/results?search_query=${Uri.encodeComponent(query)}';
+    
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Could not open video'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -97,7 +118,7 @@ class _SharedExerciseScreenState extends State<SharedExerciseScreen> {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: Text('${_title} with ${widget.partnerName}'),
+        title: Text('$_title with ${widget.partnerName}'),
         backgroundColor: Colors.transparent,
       ),
       body: Container(
@@ -166,6 +187,23 @@ class _SharedExerciseScreenState extends State<SharedExerciseScreen> {
                 ),
 
                 const SizedBox(height: 24),
+
+                // Video link button for calm_video type
+                if (widget.exerciseType == 'calm_video') ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: _openVideo,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: cs.tertiary,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                      ),
+                      icon: const Icon(Icons.play_circle_outline_rounded, size: 24),
+                      label: const Text('Watch Calming Video', style: TextStyle(fontSize: 16)),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
 
                 Container(
                   padding: const EdgeInsets.all(16),
