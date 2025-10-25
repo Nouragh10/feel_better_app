@@ -1,504 +1,224 @@
-// PATH: lib/screens/shared_exercise_screen.dart (NEW)
+// PATH: lib/screens/shared_exercise_screen.dart
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:async';
+
+import '../widgets/action_timer.dart';
 
 class SharedExerciseScreen extends StatefulWidget {
-  final String chatId;
-  final String activityId;
-  final String exerciseType; // breathing, yoga, calm_video
-  final String friendName;
-
   const SharedExerciseScreen({
-    Key? key,
+    super.key,
     required this.chatId,
     required this.activityId,
     required this.exerciseType,
-    required this.friendName,
-  }) : super(key: key);
+    required this.partnerName,
+  });
+
+  final String chatId;
+  final String activityId;
+  final String exerciseType; // 'breathing' | 'yoga' | 'calm_video'
+  final String partnerName;
 
   @override
   State<SharedExerciseScreen> createState() => _SharedExerciseScreenState();
 }
 
-class _SharedExerciseScreenState extends State<SharedExerciseScreen>
-    with SingleTickerProviderStateMixin {
-  late int _totalSeconds;
-  late int _remainingSeconds;
-  Timer? _timer;
-  bool _isRunning = false;
-  late AnimationController _pulseController;
+class _SharedExerciseScreenState extends State<SharedExerciseScreen> {
+  bool _completing = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _setExerciseDuration();
-    _pulseController = AnimationController(
-      duration: const Duration(milliseconds: 1500),
-      vsync: this,
-    )..repeat(reverse: true);
-  }
+  int get _initialSeconds => switch (widget.exerciseType) {
+        'breathing' => 120,
+        'yoga' => 300,
+        'calm_video' => 180,
+        _ => 180,
+      };
 
-  void _setExerciseDuration() {
-    switch (widget.exerciseType) {
-      case 'breathing':
-        _totalSeconds = 120; // 2 minutes
-        break;
-      case 'yoga':
-        _totalSeconds = 300; // 5 minutes
-        break;
-      case 'calm_video':
-        _totalSeconds = 180; // 3 minutes
-        break;
-      default:
-        _totalSeconds = 120;
+  List<int> get _options => switch (widget.exerciseType) {
+        'breathing' => const [120, 180, 300],
+        'yoga' => const [300, 420, 600],
+        'calm_video' => const [180, 240, 300],
+        _ => const [180, 240, 300],
+      };
+
+  String get _title => switch (widget.exerciseType) {
+        'breathing' => 'Breathing Exercise',
+        'yoga' => 'Yoga Session',
+        'calm_video' => 'Calm Video',
+        _ => 'Exercise',
+      };
+
+  String get _emoji => switch (widget.exerciseType) {
+        'breathing' => '🫁',
+        'yoga' => '🧘‍♀️',
+        'calm_video' => '🎧',
+        _ => '✨',
+      };
+
+  String get _instructions => switch (widget.exerciseType) {
+        'breathing' =>
+            'We’ll do a simple 4-4-4-4 box breath together.\n\n'
+            '• Inhale through your nose for 4 counts\n'
+            '• Hold for 4\n'
+            '• Exhale through your mouth for 4\n'
+            '• Hold for 4\n\n'
+            'Repeat gently. If anything feels uncomfortable, return to natural breathing.',
+        'yoga' =>
+            'We’ll flow through a gentle mini-sequence:\n\n'
+            '• Neck rolls (30s)\n'
+            '• Shoulder circles (30s)\n'
+            '• Cat/Cow (1 min)\n'
+            '• Child’s Pose (1 min)\n'
+            '• Seated forward fold (1 min)\n\n'
+            'Move within your comfort. Stop if you feel any pain.',
+        'calm_video' =>
+            'We’ll watch a short calming clip together.\n\n'
+            '• Settle into a comfy position\n'
+            '• Let your shoulders drop\n'
+            '• Notice one soothing detail in the video: colors, sounds, or pace\n\n'
+            'Breathe slowly as you watch.',
+        _ =>
+            'Do this short exercise at a gentle pace. You can finish early if needed.',
+      };
+
+  Future<void> _complete() async {
+    if (_completing) return;
+    setState(() => _completing = true);
+    try {
+      if (!mounted) return;
+      Navigator.of(context).pop(true); // tell ChatScreen that we completed
+    } finally {
+      if (mounted) setState(() => _completing = false);
     }
-    _remainingSeconds = _totalSeconds;
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    _pulseController.dispose();
-    super.dispose();
-  }
-
-  void _startTimer() {
-    if (_isRunning) return;
-    setState(() => _isRunning = true);
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_remainingSeconds <= 1) {
-        timer.cancel();
-        setState(() => _isRunning = false);
-        _showCompletionDialog();
-      } else {
-        setState(() => _remainingSeconds -= 1);
-      }
-    });
-  }
-
-  void _pauseTimer() {
-    _timer?.cancel();
-    setState(() => _isRunning = false);
-  }
-
-  void _resetTimer() {
-    _timer?.cancel();
-    setState(() {
-      _isRunning = false;
-      _remainingSeconds = _totalSeconds;
-    });
-  }
-
-  void _completeExercise() {
-    Navigator.pop(context, true);
-  }
-
-  void _showCompletionDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        child: Container(
-          padding: const EdgeInsets.all(32),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Colors.green.withOpacity(0.1),
-                Colors.blue.withOpacity(0.1),
-              ],
-            ),
-            borderRadius: BorderRadius.circular(24),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.celebration_rounded, size: 64, color: Colors.green),
-              const SizedBox(height: 24),
-              const Text(
-                'Excellent Work!',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'You completed the exercise! Your friend can still finish.',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.grey.shade600,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 32),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _completeExercise();
-                  },
-                  child: const Text('Close'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _formatTime(int seconds) {
-    final minutes = seconds ~/ 60;
-    final secs = seconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
-  }
-
-  Widget _buildExerciseContent() {
-    switch (widget.exerciseType) {
-      case 'breathing':
-        return _buildBreathingExercise();
-      case 'yoga':
-        return _buildYogaExercise();
-      case 'calm_video':
-        return _buildCalmVideoExercise();
-      default:
-        return const SizedBox.shrink();
-    }
-  }
-
-  Widget _buildBreathingExercise() {
-    return Column(
-      children: [
-        Container(
-          width: 120,
-          height: 120,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-              colors: [Colors.cyan, Colors.blue],
-            ),
-          ),
-          child: const Center(
-            child: Icon(Icons.air_rounded, size: 64, color: Colors.white),
-          ),
-        ),
-        const SizedBox(height: 24),
-        const Text(
-          'Box Breathing',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          'Inhale 4 seconds • Hold 4 seconds\nExhale 4 seconds • Hold 4 seconds',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 14, height: 1.6),
-        ),
-        const SizedBox(height: 32),
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.cyan.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            children: [
-              Text(
-                'Breathing Cycle',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.cyan.shade800,
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Follow your breath:\n'
-                '1. Inhale through your nose for 4 counts\n'
-                '2. Hold your breath for 4 counts\n'
-                '3. Exhale through your mouth for 4 counts\n'
-                '4. Hold for 4 counts\n\n'
-                'Repeat this cycle during the timer',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, height: 1.6),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildYogaExercise() {
-    return Column(
-      children: [
-        Container(
-          width: 120,
-          height: 120,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-              colors: [Colors.purple, Colors.indigo],
-            ),
-          ),
-          child: const Center(
-            child: Icon(Icons.self_improvement_rounded, size: 64, color: Colors.white),
-          ),
-        ),
-        const SizedBox(height: 24),
-        const Text(
-          'Gentle Yoga Flow',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          '5-minute guided session',
-          style: TextStyle(fontSize: 14),
-        ),
-        const SizedBox(height: 32),
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.purple.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            children: [
-              Text(
-                'Yoga Poses',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.purple.shade800,
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                '• Child\'s Pose - 1 minute (rest & relax)\n'
-                '• Cat-Cow Stretch - 1 minute (warm up)\n'
-                '• Downward Dog - 1 minute (energize)\n'
-                '• Warrior Pose - 1 minute (strengthen)\n'
-                '• Corpse Pose - 1 minute (cool down)\n\n'
-                'Move gently and breathe deeply',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, height: 1.6),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCalmVideoExercise() {
-    return Column(
-      children: [
-        Container(
-          width: 120,
-          height: 120,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-              colors: [Colors.orange, Colors.amber],
-            ),
-          ),
-          child: const Center(
-            child: Icon(Icons.play_circle_outline_rounded, size: 64, color: Colors.white),
-          ),
-        ),
-        const SizedBox(height: 24),
-        const Text(
-          'Guided Meditation',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 12),
-        const Text(
-          '3-minute calm video',
-          style: TextStyle(fontSize: 14),
-        ),
-        const SizedBox(height: 32),
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: Colors.orange.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            children: [
-              Text(
-                'Video Instructions',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.orange.shade800,
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                '• Find a comfortable seated position\n'
-                '• Close your eyes if comfortable\n'
-                '• Listen to the guided meditation\n'
-                '• Follow along with the breathing cues\n'
-                '• Feel your body relax and calm\n\n'
-                'Watch a YouTube video on meditation',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, height: 1.6),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Shared Exercise'),
+        title: Text('${_title} with ${widget.partnerName}'),
         backgroundColor: Colors.transparent,
-        elevation: 0,
       ),
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            children: [
-              // Exercise instructions
-              _buildExerciseContent(),
-
-              const SizedBox(height: 48),
-
-              // Friend status
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: cs.surfaceVariant.withOpacity(0.5),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.people_rounded),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Doing this together',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                          ),
-                          Text(
-                            widget.friendName,
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? const [Color(0xFF0B1120), Color(0xFF0F172A), Color(0xFF1E293B)]
+                : const [Color(0xFFF0F9FF), Color(0xFFFAFAFF), Color(0xFFFFFFFF)],
+          ),
+        ),
+        child: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header card
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [cs.primary.withOpacity(0.15), cs.secondary.withOpacity(0.15)],
                     ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 48),
-
-              // Large timer display
-              Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [
-                      cs.primary.withOpacity(0.2),
-                      cs.secondary.withOpacity(0.2),
-                    ],
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: cs.primary.withOpacity(0.3), width: 2),
                   ),
-                  border: Border.all(
-                    color: cs.primary,
-                    width: 3,
-                  ),
-                ),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  child: Row(
                     children: [
-                      Text(
-                        _formatTime(_remainingSeconds),
-                        style: const TextStyle(
-                          fontSize: 64,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'remaining',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: cs.onSurface.withOpacity(0.6),
+                      Text(_emoji, style: const TextStyle(fontSize: 42)),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Together with ${widget.partnerName}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: cs.primary,
+                                  letterSpacing: 0.5,
+                                )),
+                            const SizedBox(height: 4),
+                            Text(_title,
+                                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                    )),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
-              ),
 
-              const SizedBox(height: 48),
+                const SizedBox(height: 20),
 
-              // Timer controls
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Start / Pause button
-                  FloatingActionButton.large(
-                    onPressed: _isRunning ? _pauseTimer : _startTimer,
-                    child: Icon(_isRunning ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                Text(
+                  _instructions,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        fontSize: 16,
+                        color: cs.onSurface.withOpacity(0.85),
+                      ),
+                ),
+
+                const SizedBox(height: 24),
+
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: cs.secondaryContainer.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  const SizedBox(width: 16),
-                  // Reset button
-                  FloatingActionButton.large(
-                    backgroundColor: cs.surfaceVariant,
-                    foregroundColor: cs.onSurfaceVariant,
-                    onPressed: _resetTimer,
-                    child: const Icon(Icons.refresh_rounded),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 32),
-
-              // Complete button
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: FilledButton(
-                  onPressed: _completeExercise,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: Colors.green,
-                  ),
-                  child: const Text(
-                    'I Completed This Exercise',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: cs.onSecondaryContainer, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Finish the timer (optional) and tap "I Completed This" to mark your part done.',
+                          style: TextStyle(fontSize: 13, color: cs.onSecondaryContainer),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
 
-              const SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-              // Close button
-              SizedBox(
-                width: double.infinity,
-                height: 56,
-                child: OutlinedButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Exit Without Completing'),
+                // Shared timer (local for the user)
+                ActionTimer(
+                  initialSeconds: _initialSeconds,
+                  options: _options,
+                  onComplete: () {}, // timer completion is optional; completion is via button below
                 ),
-              ),
 
-              const SizedBox(height: 32),
-            ],
+                const SizedBox(height: 24),
+
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: FilledButton.icon(
+                    onPressed: _completing ? null : _complete,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: cs.secondary,
+                      foregroundColor: cs.onSecondary,
+                    ),
+                    icon: _completing
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.check_circle_rounded),
+                    label: Text(_completing ? 'Completing...' : 'I Completed This'),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),

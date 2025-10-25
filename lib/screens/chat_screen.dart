@@ -1,897 +1,672 @@
-// PATH: lib/screens/chat_screen.dart (UPDATED)
-import 'package:flutter/material.dart';
+// PATH: lib/screens/chat_screen.dart
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'shared_activity_screen.dart';
+import 'package:flutter/material.dart';
 
+import '../widgets/action_timer.dart';
+import 'shared_exercise_screen.dart';
+
+/// ChatScreen
+/// Required: chatId
+/// Optional: friendUid / friendId (alias), friendName (for header; resolved if missing)
 class ChatScreen extends StatefulWidget {
-  final String friendId;
-  final String friendName;
-  final String chatId;
-
   const ChatScreen({
-    Key? key,
-    required this.friendId,
-    required this.friendName,
+    super.key,
     required this.chatId,
-  }) : super(key: key);
+    this.friendUid,
+    this.friendId, // <— alias to support calls from friends_screen.dart
+    this.friendName,
+  });
+
+  final String chatId;
+  final String? friendUid;
+  final String? friendId; // alias
+  final String? friendName;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final _messageController = TextEditingController();
-  final _scrollController = ScrollController();
-  final _currentUserId = FirebaseAuth.instance.currentUser!.uid;
+  final _db = FirebaseFirestore.instance;
+  final _auth = FirebaseAuth.instance;
+
+  final TextEditingController _textCtrl = TextEditingController();
+  bool _sending = false;
+
+  String? _myUid;
+  String? _partnerUid;
+  String? _partnerName;
+
+  ColorScheme get _cs => Theme.of(context).colorScheme;
+  bool get _isDark => Theme.of(context).brightness == Brightness.dark;
+
+  @override
+  void initState() {
+    super.initState();
+    _myUid = _auth.currentUser?.uid;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _resolvePartnerMeta());
+  }
+
+  Future<void> _resolvePartnerMeta() async {
+    try {
+      final chatRef = _db.collection('chats').doc(widget.chatId);
+      final chatSnap = await chatRef.get();
+      final chat = chatSnap.data() ?? {};
+      final participants = (chat['participants'] as List?)?.cast<String>() ?? const <String>[];
+
+      _myUid ??= _auth.currentUser?.uid;
+
+      // prefer participants, fall back to friendUid/friendId passed from friends_screen.dart
+      if (participants.length == 2) {
+        final partner = participants.firstWhere(
+          (id) => id != _myUid,
+          orElse: () => (widget.friendUid ?? widget.friendId ?? ''),
+        );
+        _partnerUid = partner.isNotEmpty ? partner : (widget.friendUid ?? widget.friendId ?? '');
+      } else {
+        _partnerUid ??= widget.friendUid ?? widget.friendId;
+      }
+
+      // partner display name
+      if (widget.friendName != null && widget.friendName!.trim().isNotEmpty) {
+        _partnerName = widget.friendName!.trim();
+      } else if ((_partnerUid ?? '').isNotEmpty) {
+        try {
+          final userSnap = await _db.collection('users').doc(_partnerUid).get();
+          final data = userSnap.data();
+          final display = (data?['displayName'] as String?)?.trim();
+          final uname = (data?['username'] as String?)?.trim();
+          _partnerName = (display?.isNotEmpty ?? false)
+              ? display
+              : ((uname?.isNotEmpty ?? false) ? uname : 'Friend');
+        } catch (_) {
+          _partnerName ??= 'Friend';
+        }
+      } else {
+        _partnerName ??= 'Friend';
+      }
+
+      if (mounted) setState(() {});
+    } catch (_) {
+      _partnerName ??= widget.friendName ?? 'Friend';
+      if (mounted) setState(() {});
+    }
+  }
 
   @override
   void dispose() {
-    _messageController.dispose();
-    _scrollController.dispose();
+    _textCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _sendMessage() async {
-    final text = _messageController.text.trim();
-    if (text.isEmpty) return;
+  // ------------------------ Messaging ------------------------
 
-    await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.chatId)
-        .collection('messages')
-        .add({
-      'text': text,
-      'senderId': _currentUserId,
-      'timestamp': FieldValue.serverTimestamp(),
-      'type': 'text',
-    });
+  Future<void> _sendTextMessage() async {
+    final text = _textCtrl.text.trim();
+    if (text.isEmpty || _myUid == null) return;
 
-    _messageController.clear();
-    _scrollToBottom();
+    setState(() => _sending = true);
+    try {
+      final chatRef = _db.collection('chats').doc(widget.chatId);
+      final msgRef = chatRef.collection('messages').doc();
+
+      await msgRef.set({
+        'type': 'text',
+        'senderId': _myUid,
+        'text': text,
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+
+      await chatRef.update({'updatedAt': FieldValue.serverTimestamp()});
+      _textCtrl.clear();
+    } catch (e) {
+      _snack('Could not send: $e');
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
   }
 
-  Future<void> _initiateSharedExercise(String exerciseType) async {
-    // Create a shared activity session
-    final activityRef = await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.chatId)
-        .collection('activities')
-        .add({
-      'type': exerciseType,
-      'exerciseType': exerciseType, // breathing, yoga, calm_video
-      'initiatorId': _currentUserId,
-      'status': 'pending',
-      'createdAt': FieldValue.serverTimestamp(),
-      'participants': {
-        _currentUserId: {
-          'completed': false,
-          'joinedAt': null,
-          'completedAt': null,
-        },
-        widget.friendId: {
-          'completed': false,
-          'joinedAt': null,
-          'completedAt': null,
-        },
-      },
-    });
-
-    // Send activity invitation message
-    await FirebaseFirestore.instance
-        .collection('chats')
-        .doc(widget.chatId)
-        .collection('messages')
-        .add({
-      'type': 'exercise_invite',
-      'exerciseType': exerciseType,
-      'activityId': activityRef.id,
-      'senderId': _currentUserId,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
-
-    _scrollToBottom();
-  }
-
-  void _scrollToBottom() {
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
+  // -------------------- Exercise Invitations --------------------
 
   void _showExercisePicker() {
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        margin: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                    Theme.of(context).colorScheme.secondary.withOpacity(0.1),
-                  ],
-                ),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      showDragHandle: true,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _exerciseOption(
+                icon: Icons.air_rounded,
+                title: 'Breathing Exercise',
+                subtitle: '2 minutes • in sync together',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _initiateExercise('breathing');
+                },
               ),
-              child: Row(
-                children: [
-                  Icon(Icons.favorite, color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(width: 12),
-                  Text(
-                    'Do a mental health exercise together',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 12),
+              _exerciseOption(
+                icon: Icons.self_improvement_rounded,
+                title: 'Yoga Session',
+                subtitle: '5 minutes • gentle flow',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _initiateExercise('yoga');
+                },
               ),
-            ),
-            _buildExerciseOption(
-              title: 'Breathing Exercise',
-              subtitle: 'Box breathing - 2 minutes',
-              icon: Icons.air,
-              color: Colors.cyan,
-              exerciseType: 'breathing',
-              onTap: () {
-                Navigator.pop(context);
-                _initiateSharedExercise('breathing');
-              },
-            ),
-            _buildExerciseOption(
-              title: 'Yoga Session',
-              subtitle: 'Gentle flow - 5 minutes',
-              icon: Icons.self_improvement,
-              color: Colors.purple,
-              exerciseType: 'yoga',
-              onTap: () {
-                Navigator.pop(context);
-                _initiateSharedExercise('yoga');
-              },
-            ),
-            _buildExerciseOption(
-              title: 'Calm Video',
-              subtitle: 'Guided meditation - 3 minutes',
-              icon: Icons.play_circle,
-              color: Colors.orange,
-              exerciseType: 'calm_video',
-              onTap: () {
-                Navigator.pop(context);
-                _initiateSharedExercise('calm_video');
-              },
-            ),
-            const SizedBox(height: 16),
-          ],
+              const SizedBox(height: 12),
+              _exerciseOption(
+                icon: Icons.play_circle_outline_rounded,
+                title: 'Calm Video',
+                subtitle: '3 minutes • soothing clip',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _initiateExercise('calm_video');
+                },
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildExerciseOption({
+  Widget _exerciseOption({
+    required IconData icon,
     required String title,
     required String subtitle,
-    required IconData icon,
-    required Color color,
-    required String exerciseType,
     required VoidCallback onTap,
   }) {
     return InkWell(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: _isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.08),
+          ),
+        ),
         child: Row(
           children: [
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
+                gradient: LinearGradient(colors: [_cs.primary, _cs.secondary]),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Icon(icon, color: color, size: 28),
+              child: Icon(icon, color: Colors.white, size: 24),
             ),
             const SizedBox(width: 16),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
-                    ),
-                  ),
-                ],
-              ),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  title,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _cs.onSurface),
+                ),
+                const SizedBox(height: 2),
+                Text(subtitle, style: TextStyle(fontSize: 13, color: _cs.onSurface.withOpacity(0.6))),
+              ]),
             ),
-            Icon(
-              Icons.arrow_forward_rounded,
-              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.3),
-            ),
+            Icon(Icons.arrow_forward_rounded, color: _cs.onSurface.withOpacity(0.3), size: 20),
           ],
         ),
       ),
     );
   }
 
+  Future<void> _initiateExercise(String exerciseType) async {
+    if (_myUid == null) return;
+    try {
+      final chatRef = _db.collection('chats').doc(widget.chatId);
+      final chatSnap = await chatRef.get();
+      final chat = chatSnap.data() ?? {};
+      final participants = (chat['participants'] as List?)?.cast<String>() ?? const <String>[];
+
+      if (participants.length != 2) {
+        _snack('This feature requires a 1:1 chat.');
+        return;
+      }
+
+      final activityRef = chatRef.collection('activities').doc();
+      final now = FieldValue.serverTimestamp();
+
+      final partMap = <String, dynamic>{};
+      for (final uid in participants) {
+        partMap[uid] = {'completed': false, 'joinedAt': null, 'completedAt': null};
+      }
+
+      await activityRef.set({
+        'type': exerciseType,
+        'exerciseType': exerciseType,
+        'initiatorId': _myUid,
+        'status': 'pending',
+        'createdAt': now,
+        'participants': partMap,
+      });
+
+      final msgRef = chatRef.collection('messages').doc();
+      await msgRef.set({
+        'type': 'exercise_invite',
+        'senderId': _myUid,
+        'timestamp': now,
+        'exerciseType': exerciseType,
+        'activityId': activityRef.id,
+      });
+
+      await chatRef.update({'updatedAt': now});
+    } catch (e) {
+      _snack('Could not start exercise: $e');
+    }
+  }
+
+  Future<void> _joinExerciseAndOpen(String activityId, String exerciseType) async {
+    if (_myUid == null) return;
+    try {
+      final actRef = _db.collection('chats').doc(widget.chatId).collection('activities').doc(activityId);
+      await actRef.update({
+        'status': 'in_progress',
+        'participants.${_myUid!}.joinedAt': FieldValue.serverTimestamp(),
+      });
+
+      final ok = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => SharedExerciseScreen(
+            chatId: widget.chatId,
+            activityId: activityId,
+            exerciseType: exerciseType,
+            partnerName: _partnerName ?? 'Friend', // <— now supported
+          ),
+        ),
+      );
+
+      if (ok == true) {
+        await _markCompletedAndMaybeUpdateStreak(activityId, exerciseType);
+      }
+    } catch (e) {
+      _snack('Could not open exercise: $e');
+    }
+  }
+
+  Future<void> _markCompletedAndMaybeUpdateStreak(String activityId, String exerciseType) async {
+    if (_myUid == null) return;
+
+    final chatRef = _db.collection('chats').doc(widget.chatId);
+    final actRef = chatRef.collection('activities').doc(activityId);
+
+    await _db.runTransaction((txn) async {
+      final actSnap = await txn.get(actRef);
+      if (!actSnap.exists) return;
+
+      final data = actSnap.data() as Map<String, dynamic>;
+      final participants = (data['participants'] as Map<String, dynamic>?) ?? {};
+      final others = participants.keys.where((k) => k != _myUid).toList();
+      final otherUid = others.isNotEmpty ? others.first : null;
+
+      // Mark me completed
+      txn.update(actRef, {
+        'participants.${_myUid!}.completed': true,
+        'participants.${_myUid!}.completedAt': FieldValue.serverTimestamp(),
+      });
+
+      // If friend also completed -> update chat streak
+      final friendDone = otherUid != null && (participants[otherUid]?['completed'] == true);
+
+      if (friendDone) {
+        txn.update(actRef, {'status': 'completed'});
+
+        final chatSnap = await txn.get(chatRef);
+        final chat = chatSnap.data() as Map<String, dynamic>? ?? {};
+        final current = (chat['streak'] as int?) ?? 0;
+        final longest = (chat['longestStreak'] as int?) ?? 0;
+        final lastTs = (chat['lastActivityDate'] as Timestamp?);
+
+        final now = DateTime.now();
+        int nextStreak = 1;
+        if (lastTs != null) {
+          final last = lastTs.toDate();
+          final sameDay = _isSameDay(now, last);
+          final yesterday = _isYesterday(now, last);
+          if (sameDay) {
+            nextStreak = current;
+          } else if (yesterday) {
+            nextStreak = current + 1;
+          } else {
+            nextStreak = 1;
+          }
+        }
+
+        final nextLongest = nextStreak > longest ? nextStreak : longest;
+
+        txn.update(chatRef, {
+          'streak': nextStreak,
+          'longestStreak': nextLongest,
+          'lastActivityDate': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+
+        final msgRef = chatRef.collection('messages').doc();
+        txn.set(msgRef, {
+          'type': 'exercise_completed',
+          'senderId': _myUid,
+          'timestamp': FieldValue.serverTimestamp(),
+          'exerciseType': exerciseType,
+          'activityId': activityId,
+          'note': 'Both friends completed $exerciseType',
+        });
+      }
+    });
+
+    _snack('Marked completed. Nice work!');
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  bool _isYesterday(DateTime today, DateTime d) {
+    final y = today.subtract(const Duration(days: 1));
+    return _isSameDay(y, d);
+    }
+
+  // ---------------------------- UI ----------------------------
+
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.friendName),
-            StreamBuilder<DocumentSnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('chats')
-                  .doc(widget.chatId)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData) return const SizedBox.shrink();
-                final data = snapshot.data!.data() as Map<String, dynamic>?;
-                final streak = data?['streak'] ?? 0;
-                return Text(
-                  '🔥 $streak day streak',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: streak > 0 ? Colors.orange : cs.onSurface.withOpacity(0.5),
-                    fontWeight: FontWeight.w600,
+        titleSpacing: 0,
+        title: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: _db.collection('chats').doc(widget.chatId).snapshots(),
+          builder: (context, snap) {
+            final chat = snap.data?.data();
+            final streak = (chat?['streak'] as int?) ?? 0;
+            final longest = (chat?['longestStreak'] as int?) ?? 0;
+            final name = _partnerName ?? widget.friendName ?? 'Friend';
+
+            return Row(
+              children: [
+                CircleAvatar(
+                  radius: 16,
+                  child: Text(
+                    name.isNotEmpty ? name[0].toUpperCase() : '?',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
-                );
-              },
-            ),
-          ],
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(name,
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                              )),
+                      const SizedBox(height: 2),
+                      Row(children: [
+                        const Icon(Icons.local_fire_department, size: 16, color: Colors.orange),
+                        const SizedBox(width: 4),
+                        Text('$streak day streak',
+                            style: TextStyle(fontSize: 12, color: _cs.onSurface.withOpacity(0.7))),
+                        const SizedBox(width: 8),
+                        const Text('•', style: TextStyle(fontSize: 12)),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.emoji_events_rounded, size: 14),
+                        const SizedBox(width: 4),
+                        Text('best $longest',
+                            style: TextStyle(fontSize: 12, color: _cs.onSurface.withOpacity(0.7))),
+                      ]),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () => _showChatInfo(),
+            tooltip: 'Invite to exercise',
+            icon: const Icon(Icons.add_reaction_rounded),
+            onPressed: _showExercisePicker,
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Column(
         children: [
-          // Messages list
-          Expanded(
-            child: StreamBuilder<QuerySnapshot>(
-              stream: FirebaseFirestore.instance
-                  .collection('chats')
-                  .doc(widget.chatId)
-                  .collection('messages')
-                  .orderBy('timestamp', descending: false)
-                  .snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.chat_bubble_outline, size: 64, color: cs.onSurface.withOpacity(0.3)),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Start your conversation!',
-                          style: TextStyle(fontSize: 18, color: cs.onSurface.withOpacity(0.6)),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Invite your friend to do an exercise together',
-                          style: TextStyle(fontSize: 14, color: cs.onSurface.withOpacity(0.5)),
-                        ),
-                      ],
-                    ),
-                  );
-                }
-
-                final messages = snapshot.data!.docs;
-                
-                WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
-
-                return ListView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.all(16),
-                  itemCount: messages.length,
-                  itemBuilder: (context, index) {
-                    final message = messages[index].data() as Map<String, dynamic>;
-                    final type = message['type'] as String;
-
-                    if (type == 'text') {
-                      return _buildTextMessage(message);
-                    } else if (type == 'exercise_invite') {
-                      return _buildExerciseInvite(message);
-                    } else if (type == 'exercise_completed') {
-                      return _buildExerciseCompleted(message);
-                    }
-
-                    return const SizedBox.shrink();
-                  },
-                );
-              },
-            ),
-          ),
-
-          // Exercise invitation button - PROMINENT PLACEMENT
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  cs.primary.withOpacity(0.1),
-                  cs.secondary.withOpacity(0.1),
-                ],
-              ),
-              border: Border(top: BorderSide(color: cs.outline.withOpacity(0.2))),
-            ),
-            child: SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: FilledButton.icon(
-                onPressed: _showExercisePicker,
-                style: FilledButton.styleFrom(
-                  backgroundColor: cs.primary,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
-                icon: const Icon(Icons.favorite_rounded),
-                label: const Text(
-                  'Invite to exercise',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-              ),
-            ),
-          ),
-
-          // Message input
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: cs.surface,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 10,
-                  offset: const Offset(0, -2),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageController,
-                    decoration: InputDecoration(
-                      hintText: 'Send a message...',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide.none,
-                      ),
-                      filled: true,
-                      fillColor: cs.surfaceVariant.withOpacity(0.5),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 12,
-                      ),
-                    ),
-                    maxLines: null,
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _sendMessage(),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                CircleAvatar(
-                  backgroundColor: cs.primary,
-                  child: IconButton(
-                    icon: const Icon(Icons.send, color: Colors.white),
-                    onPressed: _sendMessage,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          Expanded(child: _buildMessagesList()),
+          _buildComposer(),
         ],
       ),
     );
   }
 
-  Widget _buildTextMessage(Map<String, dynamic> message) {
-    final isMe = message['senderId'] == _currentUserId;
-    final text = message['text'] as String;
-
-    return Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.7,
-        ),
-        decoration: BoxDecoration(
-          color: isMe 
-              ? Theme.of(context).colorScheme.primary 
-              : Theme.of(context).colorScheme.surfaceVariant,
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(
-            color: isMe 
-                ? Colors.white 
-                : Theme.of(context).colorScheme.onSurface,
-            fontSize: 15,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildExerciseInvite(Map<String, dynamic> message) {
-    final exerciseType = message['exerciseType'] as String;
-    final activityId = message['activityId'] as String;
-    final isMe = message['senderId'] == _currentUserId;
-
-    IconData icon;
-    Color color;
-    String displayName;
-    String duration;
-
-    switch (exerciseType) {
-      case 'breathing':
-        icon = Icons.air;
-        color = Colors.cyan;
-        displayName = 'Breathing Exercise';
-        duration = '2 min';
-        break;
-      case 'yoga':
-        icon = Icons.self_improvement;
-        color = Colors.purple;
-        displayName = 'Yoga Session';
-        duration = '5 min';
-        break;
-      case 'calm_video':
-        icon = Icons.play_circle;
-        color = Colors.orange;
-        displayName = 'Calm Video';
-        duration = '3 min';
-        break;
-      default:
-        icon = Icons.favorite;
-        color = Colors.pink;
-        displayName = exerciseType;
-        duration = '2 min';
-    }
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withOpacity(0.3), width: 2),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                backgroundColor: color,
-                child: Icon(icon, color: Colors.white),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isMe 
-                          ? 'You invited: $displayName' 
-                          : '${widget.friendName} invited: $displayName',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Icon(Icons.timer_outlined, size: 14, color: Colors.grey.shade600),
-                        const SizedBox(width: 4),
-                        Text(
-                          duration,
-                          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-                        ),
-                        const SizedBox(width: 12),
-                        const Icon(Icons.local_fire_department, size: 14, color: Colors.orange),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Complete together to grow your streak!',
-                          style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          StreamBuilder<DocumentSnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('chats')
-                .doc(widget.chatId)
-                .collection('activities')
-                .doc(activityId)
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (!snapshot.hasData) {
-                return const CircularProgressIndicator();
-              }
-
-              final activity = snapshot.data!.data() as Map<String, dynamic>?;
-              if (activity == null) return const SizedBox.shrink();
-
-              final participants = activity['participants'] as Map<String, dynamic>;
-              final myStatus = participants[_currentUserId] as Map<String, dynamic>;
-              final friendStatus = participants[widget.friendId] as Map<String, dynamic>;
-              
-              final iCompleted = myStatus['completed'] as bool;
-              final friendCompleted = friendStatus['completed'] as bool;
-
-              if (iCompleted && friendCompleted) {
-                return Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.check_circle, color: Colors.green),
-                      SizedBox(width: 8),
-                      Text(
-                        'Both completed! 🎉',
-                        style: TextStyle(
-                          color: Colors.green,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              return Column(
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _buildParticipantStatus(
-                          'You',
-                          iCompleted,
-                          color,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildParticipantStatus(
-                          widget.friendName,
-                          friendCompleted,
-                          color,
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (!iCompleted) ...[
-                    const SizedBox(height: 12),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () => _joinExercise(activityId, exerciseType),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: color,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text('Start Exercise'),
-                      ),
-                    ),
-                  ],
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildParticipantStatus(String name, bool completed, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-      decoration: BoxDecoration(
-        color: completed ? color.withOpacity(0.2) : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            completed ? Icons.check_circle : Icons.radio_button_unchecked,
-            size: 16,
-            color: completed ? color : Colors.grey,
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              name,
-              style: TextStyle(
-                fontSize: 13,
-                color: completed ? color : Colors.grey.shade600,
-                fontWeight: completed ? FontWeight.bold : FontWeight.normal,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildExerciseCompleted(Map<String, dynamic> message) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.green.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.celebration, color: Colors.green),
-          SizedBox(width: 8),
-          Text(
-            'Exercise completed together! Streak +1 🔥',
-            style: TextStyle(
-              color: Colors.green,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _joinExercise(String activityId, String exerciseType) async {
-    // Navigate to the shared exercise screen
-    final completed = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (context) => SharedExerciseScreen(
-          chatId: widget.chatId,
-          activityId: activityId,
-          exerciseType: exerciseType,
-          friendName: widget.friendName,
-        ),
-      ),
-    );
-
-    if (completed == true) {
-      // Mark this user as completed
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(widget.chatId)
-          .collection('activities')
-          .doc(activityId)
-          .update({
-        'participants.$_currentUserId.completed': true,
-        'participants.$_currentUserId.completedAt': FieldValue.serverTimestamp(),
-      });
-
-      // Check if both completed and increment streak
-      await _checkBothCompletedAndUpdateStreak(activityId);
-    }
-  }
-
-  Future<void> _checkBothCompletedAndUpdateStreak(String activityId) async {
-    final activityDoc = await FirebaseFirestore.instance
+  Widget _buildMessagesList() {
+    final msgs = _db
         .collection('chats')
         .doc(widget.chatId)
-        .collection('activities')
-        .doc(activityId)
-        .get();
+        .collection('messages')
+        .orderBy('timestamp', descending: false)
+        .limit(200);
 
-    final activity = activityDoc.data() as Map<String, dynamic>;
-    final participants = activity['participants'] as Map<String, dynamic>;
-    
-    final allCompleted = participants.values.every(
-      (p) => (p as Map<String, dynamic>)['completed'] == true,
-    );
-
-    if (allCompleted) {
-      // Increment streak
-      final chatDoc = await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(widget.chatId)
-          .get();
-      
-      final chatData = chatDoc.data() as Map<String, dynamic>?;
-      final lastActivityDate = (chatData?['lastActivityDate'] as Timestamp?)?.toDate();
-      final currentStreak = (chatData?['streak'] as int?) ?? 0;
-      final longestStreak = (chatData?['longestStreak'] as int?) ?? 0;
-      
-      final today = DateTime.now();
-      final todayKey = '${today.year}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
-      
-      int newStreak = currentStreak;
-      bool shouldIncrementStreak = false;
-      
-      if (lastActivityDate == null) {
-        // First ever activity
-        newStreak = 1;
-        shouldIncrementStreak = true;
-      } else {
-        final lastKey = '${lastActivityDate.year}-${lastActivityDate.month.toString().padLeft(2, '0')}-${lastActivityDate.day.toString().padLeft(2, '0')}';
-        
-        if (lastKey != todayKey) {
-          // Different day - check if consecutive
-          final yesterday = today.subtract(const Duration(days: 1));
-          final yesterdayKey = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
-          
-          if (lastKey == yesterdayKey) {
-            // Consecutive day!
-            newStreak = currentStreak + 1;
-            shouldIncrementStreak = true;
-          } else {
-            // Streak broken, start fresh
-            newStreak = 1;
-            shouldIncrementStreak = true;
-          }
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: msgs.snapshots(),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
         }
-      }
-      
-      if (shouldIncrementStreak) {
-        await FirebaseFirestore.instance
-            .collection('chats')
-            .doc(widget.chatId)
-            .set({
-          'streak': newStreak,
-          'longestStreak': newStreak > longestStreak ? newStreak : longestStreak,
-          'lastActivityDate': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-
-      // Send completion message
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(widget.chatId)
-          .collection('messages')
-          .add({
-        'type': 'exercise_completed',
-        'activityId': activityId,
-        'timestamp': FieldValue.serverTimestamp(),
-        'streakIncremented': shouldIncrementStreak,
-        'newStreak': newStreak,
-      });
-
-      // Update activity status
-      await FirebaseFirestore.instance
-          .collection('chats')
-          .doc(widget.chatId)
-          .collection('activities')
-          .doc(activityId)
-          .update({'status': 'completed'});
-    }
-  }
-
-  void _showChatInfo() {
-    showModalBottomSheet(
-      context: context,
-      builder: (context) => StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('chats')
-            .doc(widget.chatId)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          final data = snapshot.data!.data() as Map<String, dynamic>?;
-          final streak = data?['streak'] ?? 0;
-          final longestStreak = data?['longestStreak'] ?? 0;
-
-          return Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Friendship Exercise Streak',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 24),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _buildStreakStat('🔥', streak.toString(), 'Day Streak'),
-                    _buildStreakStat('⭐', longestStreak.toString(), 'Longest'),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primaryContainer.withOpacity(0.5),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Text(
-                    'Complete mental health exercises together daily to grow your streak! Choose from breathing exercises, yoga, or calm videos.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ),
-              ],
+        final docs = snap.data?.docs ?? const [];
+        if (docs.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Say hi to ${_partnerName ?? 'your friend'} and invite them to a quick exercise ✨',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: _cs.onSurface.withOpacity(0.7)),
+              ),
             ),
           );
-        },
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (context, i) {
+            final m = docs[i].data();
+            final type = (m['type'] as String?) ?? 'text';
+            switch (type) {
+              case 'exercise_invite':
+                return _exerciseInviteTile(
+                  activityId: (m['activityId'] as String?) ?? '',
+                  exerciseType: (m['exerciseType'] as String?) ?? 'breathing',
+                  senderId: (m['senderId'] as String?) ?? '',
+                  ts: m['timestamp'] as Timestamp?,
+                );
+              case 'exercise_completed':
+                return _systemTile(
+                    '🎉 Both of you completed ${(m['exerciseType'] as String?) ?? 'an exercise'} today!');
+              default:
+                return _textTile(
+                  text: (m['text'] as String?) ?? '',
+                  mine: m['senderId'] == _myUid,
+                  ts: m['timestamp'] as Timestamp?,
+                );
+            }
+          },
+        );
+      },
+    );
+  }
+
+  Widget _textTile({required String text, required bool mine, Timestamp? ts}) {
+    final bubble = Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: mine ? _cs.primary.withOpacity(0.18) : _cs.surfaceVariant.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: mine ? _cs.primary.withOpacity(0.35) : _cs.outline.withOpacity(0.15),
+          width: 1.5,
+        ),
+      ),
+      child: Text(text, style: TextStyle(color: _cs.onSurface, fontSize: 15, height: 1.4)),
+    );
+
+    return Row(
+      mainAxisAlignment: mine ? MainAxisAlignment.end : MainAxisAlignment.start,
+      children: [Flexible(child: bubble)],
+    );
+  }
+
+  Widget _systemTile(String text) {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: _cs.secondaryContainer.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(text, style: TextStyle(fontSize: 12, color: _cs.onSecondaryContainer)),
       ),
     );
   }
 
-  Widget _buildStreakStat(String emoji, String value, String label) {
-    return Column(
-      children: [
-        Text(emoji, style: const TextStyle(fontSize: 32)),
-        const SizedBox(height: 8),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-          ),
+  Widget _exerciseInviteTile({
+    required String activityId,
+    required String exerciseType,
+    required String senderId,
+    required Timestamp? ts,
+  }) {
+    final me = senderId == _myUid;
+    final title = switch (exerciseType) {
+      'breathing' => 'Breathing exercise',
+      'yoga' => 'Yoga session',
+      'calm_video' => 'Calm video',
+      _ => 'Shared exercise',
+    };
+
+    final durLabel = switch (exerciseType) {
+      'breathing' => '2 min',
+      'yoga' => '5 min',
+      'calm_video' => '3 min',
+      _ => 'few min',
+    };
+
+    return InkWell(
+      onTap: () => _joinExerciseAndOpen(activityId, exerciseType),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: _isDark ? Colors.white.withOpacity(0.04) : Colors.black.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _cs.outline.withOpacity(0.12)),
         ),
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 12,
-            color: Colors.grey,
-          ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [_cs.primary, _cs.secondary]),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                exerciseType == 'breathing'
+                    ? Icons.air_rounded
+                    : exerciseType == 'yoga'
+                        ? Icons.self_improvement_rounded
+                        : Icons.play_circle_outline_rounded,
+                color: Colors.white,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(title,
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: _cs.onSurface)),
+                const SizedBox(height: 2),
+                Text(
+                  me ? 'You invited ${_partnerName ?? 'friend'} • $durLabel'
+                     : '${_partnerName ?? 'Friend'} invited you • $durLabel',
+                  style: TextStyle(fontSize: 12, color: _cs.onSurface.withOpacity(0.6)),
+                ),
+              ]),
+            ),
+            Icon(Icons.arrow_forward_rounded, color: _cs.onSurface.withOpacity(0.35), size: 18),
+          ],
         ),
-      ],
+      ),
+    );
+  }
+
+  Widget _buildComposer() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      decoration: BoxDecoration(
+        color: _isDark ? Colors.black.withOpacity(0.15) : Colors.white.withOpacity(0.9),
+        border: Border(top: BorderSide(color: _cs.outline.withOpacity(0.15))),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: 'Invite to exercise',
+              icon: const Icon(Icons.add_reaction_rounded),
+              onPressed: _showExercisePicker,
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: TextField(
+                controller: _textCtrl,
+                minLines: 1,
+                maxLines: 4,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _sendTextMessage(),
+                decoration: InputDecoration(
+                  hintText: 'Message',
+                  filled: true,
+                  fillColor: _isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: _sending ? null : _sendTextMessage,
+              child: _sending
+                  ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.send_rounded, size: 18),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
     );
   }
 }
