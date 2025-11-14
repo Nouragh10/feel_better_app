@@ -16,6 +16,7 @@ import 'services/firestore_service.dart';
 import 'screens/friends_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart' show ghostMode;
+import 'screens/auth_screen.dart';
 
 import 'widgets/ghost_mode_button.dart';
 import 'widgets/action_timer.dart';
@@ -43,12 +44,6 @@ Future<void> main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-
-  try {
-    if (FirebaseAuth.instance.currentUser == null) {
-      await FirebaseAuth.instance.signInAnonymously();
-    }
-  } catch (_) {}
 
   runApp(const FeelBetterApp());
 }
@@ -184,7 +179,28 @@ class FeelBetterApp extends StatelessWidget {
           labelStyle: const TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
-      home: const SuggestionScreen(),
+      // NEW: Use StreamBuilder to check auth state
+      home: StreamBuilder<User?>(
+        stream: FirebaseAuth.instance.authStateChanges(),
+        builder: (context, snapshot) {
+          // Show loading while checking auth state
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Scaffold(
+              body: Center(
+                child: CircularProgressIndicator(),
+              ),
+            );
+          }
+          
+          // If user is logged in, show main app
+          if (snapshot.hasData && snapshot.data != null) {
+            return const SuggestionScreen();
+          }
+          
+          // Otherwise show login screen
+          return const AuthScreen();
+        },
+      ),
     );
   }
 }
