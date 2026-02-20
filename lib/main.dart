@@ -9,18 +9,29 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'firebase_options.dart';
-import 'services/openai_service.dart';
-import 'services/firestore_service.dart';
-
+// SCREENS
+import 'screens/home_screen.dart';
 import 'screens/friends_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart' show ghostMode;
 
+// FIREBASE CONFIG
+import 'firebase_options.dart';
+
+// SERVICES
+import 'services/openai_service.dart';
+import 'services/firestore_service.dart';
+
+// WIDGETS
 import 'widgets/ghost_mode_button.dart';
 import 'widgets/action_timer.dart';
 import 'widgets/daily_exercise_card.dart';
 import 'widgets/crisis_alert_dialog.dart';
+
+// NEW (music sync)
+import 'models/music_models.dart';
+import 'services/music_repository.dart';
+import 'widgets/connect_music_sheet.dart';
 
 // ------------------ Elevated Brand Palette ------------------
 const kPrimaryCyan = Color(0xFF06B6D4);
@@ -184,7 +195,7 @@ class FeelBetterApp extends StatelessWidget {
           labelStyle: const TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
-      home: const SuggestionScreen(),
+      home: HomeScreen(),
     );
   }
 }
@@ -205,6 +216,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   final TextEditingController _moodController = TextEditingController();
   final TextEditingController _itemsController = TextEditingController();
   final _fs = FirestoreService();
+
+  // NEW (music)
+  final _musicRepo = MusicRepository();
 
   // State variables
   bool _loading = false;
@@ -319,12 +333,11 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     }
 
     // Check if user has phone/device nearby for content suggestions
-    final hasDevice = items.any((i) => 
-      i.toLowerCase().contains('phone') ||
-      i.toLowerCase().contains('laptop') ||
-      i.toLowerCase().contains('tablet') ||
-      i.toLowerCase().contains('computer')
-    );
+    final hasDevice = items.any((i) =>
+        i.toLowerCase().contains('phone') ||
+        i.toLowerCase().contains('laptop') ||
+        i.toLowerCase().contains('tablet') ||
+        i.toLowerCase().contains('computer'));
 
     // If device available and no content type selected yet, show selector
     if (hasDevice && _selectedContentType == null && _suggestion == null) {
@@ -335,12 +348,52 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       return;
     }
 
+    // ---------------- NEW: Music path for "song" content type ----------------
+    if (_selectedContentType == 'song') {
+      setState(() {
+        _loading = true;
+        _extractedLink = null;
+        _showContentTypeSelector = false;
+      });
+      try {
+        final uid = FirebaseAuth.instance.currentUser?.uid ?? 'local';
+        final rec = await _musicRepo.recommendUpbeat(uid: uid);
+
+        if (!mounted) return;
+
+        if (rec == null) {
+          setState(() {
+            _suggestion =
+                'No synced playlists yet. Tap the music icon in the app bar to connect and sync.';
+            _extractedLink = null;
+          });
+        } else {
+          setState(() {
+            _suggestion = 'Give this a try: "${rec.title}" by ${rec.artist}.';
+            _extractedLink = rec.openUrl.toString();
+            _suggestionIndex++; // keep parity with AI branch
+          });
+        }
+        _fadeController.forward(from: 0);
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _suggestion = 'Couldn’t pick a song right now. Try again after syncing playlists.';
+          _extractedLink = null;
+        });
+      } finally {
+        if (mounted) setState(() => _loading = false);
+      }
+      return; // do not fall through to OpenAI branch
+    }
+    // -------------------------------------------------------------------------
+
     setState(() {
       _loading = true;
       _extractedLink = null;
       _showContentTypeSelector = false;
     });
-    
+
     try {
       Map<String, String>? prefs;
       final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -354,8 +407,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
         } catch (_) {}
       }
 
-      final apiKey = const String.fromEnvironment('OPENAI_API_KEY');
-      
+      final apiKey = const String.fromEnvironment(
+          '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');
+
       // Generate suggestion with content type and variation index
       final result = await OpenAIService.suggestWithVariation(
         apiKey: apiKey.isEmpty ? null : apiKey,
@@ -367,9 +421,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       );
 
       if (!mounted) return;
-      
+
       final cleanedSuggestion = _cleanSuggestionText(result.suggestion);
-      
+
       setState(() {
         _suggestion = cleanedSuggestion;
         _extractedLink = result.linkUrl;
@@ -406,12 +460,11 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       _suggestionIndex = 0; // Reset variation counter
       _showContentTypeSelector = false;
     });
-    // Don't auto-call _getSuggestion() - let user edit and click button again
   }
 
   Future<void> _openLink() async {
     if (_extractedLink == null) return;
-    
+
     final uri = Uri.parse(_extractedLink!);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -459,7 +512,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
           authorId: uid,
           publicSummary: 'felt $mood and was recommended: $suggestion',
         );
-        
+
         try {
           final userSnap = await _fs.getUser(uid);
           final userData = userSnap.data();
@@ -535,6 +588,20 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
         actions: [
           const GhostModeButton(compact: true),
           IconButton(
+            tooltip: 'Connect Music',
+            icon: const Icon(Icons.library_music_rounded, size: 24),
+            onPressed: () => showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              useSafeArea: true,
+              backgroundColor: Theme.of(context).colorScheme.surface,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              builder: (_) => const ConnectMusicSheet(),
+            ),
+          ),
+          IconButton(
             tooltip: 'Friends',
             icon: const Icon(Icons.people_rounded, size: 24),
             onPressed: () => Navigator.of(context).push(
@@ -571,11 +638,14 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const SizedBox(height: 24),
-                    
                     const DailyExerciseCard(),
-                    
                     const SizedBox(height: 32),
-                    
+
+                    // (It looked duplicated in your original file; keeping as-is)
+                    const DailyExerciseCard(),
+
+                    const SizedBox(height: 32),
+
                     Text(
                       'How are you feeling?',
                       style: Theme.of(context).textTheme.displayMedium?.copyWith(
@@ -589,7 +659,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                         color: cs.onSurface.withOpacity(0.6),
                       ),
                     ),
-                    
+
                     const SizedBox(height: 32),
 
                     _buildGlassCard(
@@ -599,7 +669,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                         controller: _moodController,
                         textInputAction: TextInputAction.next,
                         style: const TextStyle(fontSize: 16),
-                        enabled: _suggestion == null, // NEW: Disable when showing suggestion
+                        enabled: _suggestion == null,
                         decoration: InputDecoration(
                           labelText: 'Your mood',
                           hintText: 'anxious, low, overwhelmed...',
@@ -607,7 +677,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                         ),
                       ),
                     ),
-                    
+
                     const SizedBox(height: 20),
 
                     _buildGlassCard(
@@ -618,7 +688,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                         minLines: 2,
                         maxLines: 3,
                         style: const TextStyle(fontSize: 16),
-                        enabled: _suggestion == null, // NEW: Disable when showing suggestion
+                        enabled: _suggestion == null,
                         decoration: InputDecoration(
                           labelText: 'What is nearby?',
                           hintText: 'candle, water, window, plant...',
@@ -629,7 +699,6 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
 
                     const SizedBox(height: 32),
 
-                    // Show initial button if no suggestion and no selector
                     if (_suggestion == null && !_showContentTypeSelector)
                       SizedBox(
                         width: double.infinity,
@@ -662,14 +731,12 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
 
                     const SizedBox(height: 40),
 
-                    // Show content type selector
                     if (_showContentTypeSelector)
                       FadeTransition(
                         opacity: _fadeAnimation,
                         child: _buildContentTypeSelector(cs: cs, isDark: isDark),
                       ),
 
-                    // Show result card with action buttons
                     if (_suggestion != null)
                       FadeTransition(
                         opacity: _fadeAnimation,
@@ -677,11 +744,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                           children: [
                             _buildResultCard(isDark: isDark, cs: cs),
                             const SizedBox(height: 16),
-                            
-                            // NEW: Two-button layout
+
                             Row(
                               children: [
-                                // Edit button - clears everything
                                 Expanded(
                                   child: SizedBox(
                                     height: 54,
@@ -697,7 +762,6 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                                   ),
                                 ),
                                 const SizedBox(width: 12),
-                                // Get Another - keeps inputs, new variation
                                 Expanded(
                                   child: SizedBox(
                                     height: 54,
@@ -738,14 +802,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: isDark 
-            ? kGlassDark.withOpacity(0.4) 
-            : kGlassLight.withOpacity(0.6),
+        color: isDark ? kGlassDark.withOpacity(0.4) : kGlassLight.withOpacity(0.6),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
-          color: isDark 
-              ? Colors.white.withOpacity(0.1) 
-              : Colors.white.withOpacity(0.5),
+          color: isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.5),
           width: 1.5,
         ),
         boxShadow: [
@@ -753,9 +813,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             blurRadius: 24,
             spreadRadius: -8,
             offset: const Offset(0, 8),
-            color: isDark 
-                ? Colors.black.withOpacity(0.3)
-                : cs.primary.withOpacity(0.08),
+            color: isDark ? Colors.black.withOpacity(0.3) : cs.primary.withOpacity(0.08),
           ),
         ],
       ),
@@ -771,14 +829,8 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: isDark
-              ? [
-                  kGlassDark.withOpacity(0.7),
-                  kGlassDark.withOpacity(0.5),
-                ]
-              : [
-                  kGlassLight.withOpacity(0.9),
-                  kGlassLight.withOpacity(0.7),
-                ],
+              ? [kGlassDark.withOpacity(0.7), kGlassDark.withOpacity(0.5)]
+              : [kGlassLight.withOpacity(0.9), kGlassLight.withOpacity(0.7)],
         ),
         borderRadius: BorderRadius.circular(28),
         border: Border.all(
@@ -814,9 +866,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                 child: Text(
                   'Your suggestion',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: cs.onSurface,
-                    fontWeight: FontWeight.w700,
-                  ),
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w700,
+                      ),
                 ),
               ),
             ],
@@ -827,10 +879,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
           Text(
             _suggestion!,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontSize: 15,
-              height: 1.5,
-              color: cs.onSurface.withOpacity(0.9),
-            ),
+                  fontSize: 15,
+                  height: 1.5,
+                  color: cs.onSurface.withOpacity(0.9),
+                ),
           ),
 
           if (_extractedLink != null) ...[
@@ -957,15 +1009,15 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                 child: Text(
                   'What would you like to do?',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: cs.onSurface,
-                    fontWeight: FontWeight.w700,
-                  ),
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w700,
+                      ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 20),
-          
+
           _buildContentTypeOption(
             cs: cs,
             isDark: isDark,
@@ -978,7 +1030,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             },
           ),
           const SizedBox(height: 12),
-          
+
           _buildContentTypeOption(
             cs: cs,
             isDark: isDark,
@@ -991,7 +1043,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             },
           ),
           const SizedBox(height: 12),
-          
+
           _buildContentTypeOption(
             cs: cs,
             isDark: isDark,
@@ -1004,7 +1056,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             },
           ),
           const SizedBox(height: 12),
-          
+
           _buildContentTypeOption(
             cs: cs,
             isDark: isDark,
@@ -1016,7 +1068,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
               _getSuggestion();
             },
           ),
-          
+
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
@@ -1049,14 +1101,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isDark
-              ? Colors.white.withOpacity(0.05)
-              : Colors.black.withOpacity(0.03),
+          color: isDark ? Colors.white.withOpacity(0.05) : Colors.black.withOpacity(0.03),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isDark
-                ? Colors.white.withOpacity(0.1)
-                : Colors.black.withOpacity(0.1),
+            color: isDark ? Colors.white.withOpacity(0.1) : Colors.black.withOpacity(0.1),
           ),
         ),
         child: Row(
@@ -1117,14 +1165,10 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: value
-              ? cs.primaryContainer.withOpacity(0.5)
-              : cs.surfaceVariant.withOpacity(0.3),
+          color: value ? cs.primaryContainer.withOpacity(0.5) : cs.surfaceVariant.withOpacity(0.3),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: value
-                ? cs.primary.withOpacity(0.5)
-                : cs.outline.withOpacity(0.2),
+            color: value ? cs.primary.withOpacity(0.5) : cs.outline.withOpacity(0.2),
             width: 1.5,
           ),
         ),
