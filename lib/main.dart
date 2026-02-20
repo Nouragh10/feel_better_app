@@ -18,12 +18,14 @@ import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart' show ghostMode;
 import 'screens/auth_screen.dart';
 
-import 'widgets/ghost_mode_button.dart';
 import 'widgets/action_timer.dart';
 import 'widgets/daily_exercise_card.dart';
 import 'widgets/crisis_alert_dialog.dart';
+import 'widgets/mood_chip_selector.dart';
+import 'widgets/nearby_items_input.dart';
+import 'widgets/confetti_overlay.dart';
 
-// ------------------ Elevated Brand Palette ------------------
+// ------------------ Brand Palette ------------------
 const kPrimaryCyan = Color(0xFF06B6D4);
 const kSecondaryPurple = Color(0xFF8B5CF6);
 const kAccentCoral = Color(0xFFFF6B9D);
@@ -216,13 +218,13 @@ class SuggestionScreen extends StatefulWidget {
   State<SuggestionScreen> createState() => _SuggestionScreenState();
 }
 
-class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerProviderStateMixin {
-  // Controllers
-  final TextEditingController _moodController = TextEditingController();
-  final TextEditingController _itemsController = TextEditingController();
+class _SuggestionScreenState extends State<SuggestionScreen>
+    with SingleTickerProviderStateMixin {
   final _fs = FirestoreService();
 
-  // State variables
+  // State
+  String _mood = '';
+  String _items = '';
   bool _loading = false;
   bool _saving = false;
   String? _suggestion;
@@ -230,40 +232,36 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   bool _shareWithFriends = true;
   bool _shareWithProvider = false;
 
-  // NEW: Variation system variables
-  int _suggestionIndex = 0;
+  // Content type selection (now visible upfront)
   String? _selectedContentType;
-  bool _showContentTypeSelector = false;
+
+  // Variation index
+  int _suggestionIndex = 0;
 
   // Animation
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
-
-  // ============================================================================
-  // LIFECYCLE METHODS
-  // ============================================================================
 
   @override
   void initState() {
     super.initState();
     _fadeController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 600),
+      duration: const Duration(milliseconds: 500),
     );
-    _fadeAnimation = CurvedAnimation(parent: _fadeController, curve: Curves.easeInOut);
+    _fadeAnimation = CurvedAnimation(
+      parent: _fadeController,
+      curve: Curves.easeInOut,
+    );
   }
 
   @override
   void dispose() {
-    _moodController.dispose();
-    _itemsController.dispose();
     _fadeController.dispose();
     super.dispose();
   }
 
-  // ============================================================================
-  // HELPER METHODS
-  // ============================================================================
+  // ---- Helpers ----
 
   List<String> _parseItems(String raw) {
     return raw
@@ -276,7 +274,6 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   Future<String> _getUid() async {
     final cur = FirebaseAuth.instance.currentUser;
     if (cur != null) return cur.uid;
-
     final sp = await SharedPreferences.getInstance();
     var uid = sp.getString('local_uid');
     if (uid == null) {
@@ -289,42 +286,33 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   String _cleanSuggestionText(String suggestion) {
     var cleaned = suggestion;
     cleaned = cleaned.replaceAll(
-      RegExp(r'[Ss]earch:\s*https?://[^\s]+', caseSensitive: false),
-      '',
-    );
+        RegExp(r'[Ss]earch:\s*https?://[^\s]+', caseSensitive: false), '');
     cleaned = cleaned.replaceAll(
-      RegExp(r'https?://[^\s]+', caseSensitive: false),
-      '',
-    );
-    final trailingDash = RegExp(r'\s*-\s*$');
-    cleaned = cleaned.replaceAll(trailingDash, '');
-    final multiSpace = RegExp(r'\s+');
-    cleaned = cleaned.replaceAll(multiSpace, ' ');
-    cleaned = cleaned.trim();
-    return cleaned;
+        RegExp(r'https?://[^\s]+', caseSensitive: false), '');
+    cleaned = cleaned.replaceAll(RegExp(r'\s*-\s*$'), '');
+    cleaned = cleaned.replaceAll(RegExp(r'\s+'), ' ');
+    return cleaned.trim();
   }
 
-  // ============================================================================
-  // CORE SUGGESTION LOGIC
-  // ============================================================================
+  // ---- Core Logic ----
 
   Future<void> _getSuggestion() async {
-    final mood = _moodController.text.trim();
-    final items = _parseItems(_itemsController.text);
-
-    if (mood.isEmpty) {
+    if (_mood.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('Tell us how you are feeling'),
+          content: const Text('How are you feeling right now?'),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
       return;
     }
 
-    // CRISIS CHECK FIRST
-    final crisisCheck = OpenAIService.detectCrisis(mood: mood, items: items);
+    final items = _parseItems(_items);
+
+    // Crisis check
+    final crisisCheck = OpenAIService.detectCrisis(mood: _mood, items: items);
     if (crisisCheck.isCrisis) {
       await CrisisAlertDialog.show(
         context,
@@ -334,29 +322,11 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       return;
     }
 
-    // Check if user has phone/device nearby for content suggestions
-    final hasDevice = items.any((i) => 
-      i.toLowerCase().contains('phone') ||
-      i.toLowerCase().contains('laptop') ||
-      i.toLowerCase().contains('tablet') ||
-      i.toLowerCase().contains('computer')
-    );
-
-    // If device available and no content type selected yet, show selector
-    if (hasDevice && _selectedContentType == null && _suggestion == null) {
-      setState(() {
-        _showContentTypeSelector = true;
-        _fadeController.forward(from: 0);
-      });
-      return;
-    }
-
     setState(() {
       _loading = true;
       _extractedLink = null;
-      _showContentTypeSelector = false;
     });
-    
+
     try {
       Map<String, String>? prefs;
       final uid = FirebaseAuth.instance.currentUser?.uid;
@@ -371,11 +341,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       }
 
       final apiKey = const String.fromEnvironment('OPENAI_API_KEY');
-      
-      // Generate suggestion with content type and variation index
       final result = await OpenAIService.suggestWithVariation(
         apiKey: apiKey.isEmpty ? null : apiKey,
-        mood: mood,
+        mood: _mood,
         items: items,
         userPreferences: prefs,
         contentType: _selectedContentType,
@@ -383,18 +351,16 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       );
 
       if (!mounted) return;
-      
-      final cleanedSuggestion = _cleanSuggestionText(result.suggestion);
-      
+
       setState(() {
-        _suggestion = cleanedSuggestion;
+        _suggestion = _cleanSuggestionText(result.suggestion);
         _extractedLink = result.linkUrl;
-        _suggestionIndex++; // Increment for next variation
+        _suggestionIndex++;
       });
       _fadeController.forward(from: 0);
     } on TimeoutException {
       if (!mounted) return;
-      setState(() => _suggestion = 'Network timeout—try again in a moment.');
+      setState(() => _suggestion = 'Network timeout — try again in a moment.');
     } catch (e) {
       if (!mounted) return;
       setState(() => _suggestion = 'Something went wrong. Please try again.');
@@ -403,31 +369,27 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     }
   }
 
-  // NEW: Get another suggestion with SAME inputs (different variation)
   void _getNewSuggestion() {
     setState(() {
       _suggestion = null;
       _extractedLink = null;
-      // Keep content type and inputs, just get new variation
     });
     _getSuggestion();
   }
 
-  // NEW: Clear everything and let user edit inputs
-  void _editAndStartOver() {
+  void _startOver() {
     setState(() {
+      _mood = '';
+      _items = '';
       _suggestion = null;
       _extractedLink = null;
       _selectedContentType = null;
-      _suggestionIndex = 0; // Reset variation counter
-      _showContentTypeSelector = false;
+      _suggestionIndex = 0;
     });
-    // Don't auto-call _getSuggestion() - let user edit and click button again
   }
 
   Future<void> _openLink() async {
     if (_extractedLink == null) return;
-    
     final uri = Uri.parse(_extractedLink!);
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -437,35 +399,26 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
         SnackBar(
           content: const Text('Could not open link'),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
     }
   }
 
-  // ============================================================================
-  // SAVE ENTRY LOGIC
-  // ============================================================================
-
   Future<void> _saveEntry() async {
     if (_suggestion == null) return;
-
-    final mood = _moodController.text.trim();
-    final nearby = _itemsController.text.trim();
-    final suggestion = _suggestion!.trim();
-
     setState(() => _saving = true);
     try {
       final uid = FirebaseAuth.instance.currentUser?.uid ?? 'local';
-
       final entryId = await _fs.addEntry(
         uid: uid,
-        mood: mood,
-        nearby: nearby,
-        suggestion: suggestion,
+        mood: _mood,
+        nearby: _items,
+        suggestion: _suggestion!.trim(),
         shareWithFriends: _shareWithFriends,
         shareWithProviders: _shareWithProvider,
-        publicSummary: 'felt $mood and was recommended: $suggestion',
+        publicSummary: 'felt $_mood and was recommended: ${_suggestion!.trim()}',
         createdAtLocal: DateTime.now(),
       );
 
@@ -473,9 +426,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
         await _fs.mirrorPublicEntry(
           entryId: entryId,
           authorId: uid,
-          publicSummary: 'felt $mood and was recommended: $suggestion',
+          publicSummary:
+              'felt $_mood and was recommended: ${_suggestion!.trim()}',
         );
-        
         try {
           final userSnap = await _fs.getUser(uid);
           final userData = userSnap.data();
@@ -483,7 +436,8 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
           await _fs.notifyTrustedPerson(
             fromUid: uid,
             fromUsername: username,
-            summary: 'felt $mood and was recommended: $suggestion',
+            summary:
+                'felt $_mood and was recommended: ${_suggestion!.trim()}',
           );
         } catch (_) {}
       }
@@ -492,10 +446,11 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(_shareWithFriends && !ghostMode.value
-              ? 'Saved and shared with friends'
-              : 'Saved'),
+              ? 'Saved and shared with friends ✨'
+              : 'Moment saved ✨'),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
     } catch (e) {
@@ -504,7 +459,8 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
         SnackBar(
           content: Text('Could not save: $e'),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       );
     } finally {
@@ -517,26 +473,19 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     try {
       await _fs.updateUserDailyStreakOnActionComplete(uid: uid);
       if (!mounted) return;
+      // Trigger confetti on action complete
+      ConfettiOverlay.show(context);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Daily streak updated!'),
+          content: Text('🔥 Daily streak updated!'),
           behavior: SnackBarBehavior.floating,
         ),
       );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Could not update streak: $e'),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-      );
-    }
+    } catch (_) {}
   }
 
   // ============================================================================
-  // BUILD METHOD
+  // BUILD
   // ============================================================================
 
   @override
@@ -547,24 +496,41 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text('Nearby'),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                gradient:
+                    LinearGradient(colors: [cs.primary, cs.secondary]),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child:
+                  const Icon(Icons.spa_rounded, color: Colors.white, size: 18),
+            ),
+            const SizedBox(width: 10),
+            const Text('Nearby'),
+          ],
+        ),
         actions: [
-          const GhostModeButton(compact: true),
-          IconButton(
-            tooltip: 'Friends',
-            icon: const Icon(Icons.people_rounded, size: 24),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const FriendsScreen()),
+          // Ghost mode moved to a subtle icon
+          ValueListenableBuilder<bool>(
+            valueListenable: ghostMode,
+            builder: (_, isOn, __) => IconButton(
+              tooltip: isOn ? 'Ghost mode ON' : 'Ghost mode OFF',
+              icon: Icon(
+                isOn
+                    ? Icons.visibility_off_rounded
+                    : Icons.visibility_rounded,
+                color: isOn
+                    ? cs.onSurface.withOpacity(0.4)
+                    : cs.onSurface.withOpacity(0.7),
+                size: 22,
+              ),
+              onPressed: () => ghostMode.value = !ghostMode.value,
             ),
           ),
-          IconButton(
-            tooltip: 'Profile',
-            icon: const Icon(Icons.account_circle_rounded, size: 24),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ProfileScreen()),
-            ),
-          ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
         ],
       ),
       body: Container(
@@ -582,71 +548,59 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 600),
               child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SizedBox(height: 24),
-                    
                     const DailyExerciseCard(),
-                    
-                    const SizedBox(height: 32),
-                    
-                    Text(
-                      'How are you feeling?',
-                      style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                        color: cs.onSurface,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Let us find a gentle action together',
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: cs.onSurface.withOpacity(0.6),
-                      ),
-                    ),
-                    
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 28),
 
+                    // ---- Mood chips ----
                     _buildGlassCard(
                       isDark: isDark,
                       cs: cs,
-                      child: TextField(
-                        controller: _moodController,
-                        textInputAction: TextInputAction.next,
-                        style: const TextStyle(fontSize: 16),
-                        enabled: _suggestion == null, // NEW: Disable when showing suggestion
-                        decoration: InputDecoration(
-                          labelText: 'Your mood',
-                          hintText: 'anxious, low, overwhelmed...',
-                          prefixIcon: Icon(Icons.mood_rounded, color: cs.primary),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: MoodChipSelector(
+                          initialMood: _mood,
+                          onMoodSelected: (v) => setState(() => _mood = v),
                         ),
                       ),
                     ),
-                    
+
                     const SizedBox(height: 20),
 
+                    // ---- Nearby items ----
                     _buildGlassCard(
                       isDark: isDark,
                       cs: cs,
-                      child: TextField(
-                        controller: _itemsController,
-                        minLines: 2,
-                        maxLines: 3,
-                        style: const TextStyle(fontSize: 16),
-                        enabled: _suggestion == null, // NEW: Disable when showing suggestion
-                        decoration: InputDecoration(
-                          labelText: 'What is nearby?',
-                          hintText: 'candle, water, window, plant...',
-                          prefixIcon: Icon(Icons.spa_rounded, color: cs.secondary),
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: NearbyItemsInput(
+                          initialValue: _items,
+                          enabled: _suggestion == null,
+                          onChanged: (v) => setState(() => _items = v),
                         ),
                       ),
                     ),
 
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 20),
 
-                    // Show initial button if no suggestion and no selector
-                    if (_suggestion == null && !_showContentTypeSelector)
+                    // ---- Content type picker (always visible) ----
+                    if (_suggestion == null)
+                      _buildGlassCard(
+                        isDark: isDark,
+                        cs: cs,
+                        child: Padding(
+                          padding: const EdgeInsets.all(20),
+                          child: _buildContentTypePicker(cs: cs, isDark: isDark),
+                        ),
+                      ),
+
+                    const SizedBox(height: 28),
+
+                    // ---- Get suggestion button ----
+                    if (_suggestion == null)
                       SizedBox(
                         width: double.infinity,
                         height: 60,
@@ -670,22 +624,13 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                                   children: const [
                                     Icon(Icons.auto_awesome_rounded, size: 22),
                                     SizedBox(width: 12),
-                                    Text('Get your suggestion'),
+                                    Text('Find my action'),
                                   ],
                                 ),
                         ),
                       ),
 
-                    const SizedBox(height: 40),
-
-                    // Show content type selector
-                    if (_showContentTypeSelector)
-                      FadeTransition(
-                        opacity: _fadeAnimation,
-                        child: _buildContentTypeSelector(cs: cs, isDark: isDark),
-                      ),
-
-                    // Show result card with action buttons
+                    // ---- Result ----
                     if (_suggestion != null)
                       FadeTransition(
                         opacity: _fadeAnimation,
@@ -693,27 +638,25 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                           children: [
                             _buildResultCard(isDark: isDark, cs: cs),
                             const SizedBox(height: 16),
-                            
-                            // NEW: Two-button layout
                             Row(
                               children: [
-                                // Edit button - clears everything
                                 Expanded(
                                   child: SizedBox(
                                     height: 54,
                                     child: OutlinedButton.icon(
-                                      onPressed: _editAndStartOver,
+                                      onPressed: _startOver,
                                       style: OutlinedButton.styleFrom(
-                                        side: BorderSide(color: cs.outline.withOpacity(0.5)),
+                                        side: BorderSide(
+                                            color: cs.outline.withOpacity(0.5)),
                                         foregroundColor: cs.onSurface,
                                       ),
-                                      icon: const Icon(Icons.edit_rounded, size: 20),
-                                      label: const Text('Edit Inputs'),
+                                      icon: const Icon(Icons.refresh_rounded,
+                                          size: 20),
+                                      label: const Text('Start over'),
                                     ),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
-                                // Get Another - keeps inputs, new variation
                                 Expanded(
                                   child: SizedBox(
                                     height: 54,
@@ -723,8 +666,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
                                         backgroundColor: cs.primary,
                                         foregroundColor: cs.onPrimary,
                                       ),
-                                      icon: const Icon(Icons.refresh_rounded, size: 20),
-                                      label: const Text('Get Another'),
+                                      icon: const Icon(Icons.auto_awesome_rounded,
+                                          size: 20),
+                                      label: const Text('Try another'),
                                     ),
                                   ),
                                 ),
@@ -744,23 +688,114 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   }
 
   // ============================================================================
-  // UI BUILDING METHODS
+  // UI HELPERS
   // ============================================================================
 
-  Widget _buildGlassCard({
-    required bool isDark,
-    required ColorScheme cs,
-    required Widget child,
-  }) {
+  Widget _buildContentTypePicker(
+      {required ColorScheme cs, required bool isDark}) {
+    const types = [
+      ('song', '🎵', 'Song'),
+      ('podcast', '🎙️', 'Podcast'),
+      ('video', '📹', 'Video'),
+      ('exercise', '🧘', 'Exercise'),
+    ];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'I want to...',
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: cs.onSurface,
+              ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: types.map((t) {
+            final isSelected = _selectedContentType == t.$1;
+            return Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: GestureDetector(
+                  onTap: () => setState(() {
+                    _selectedContentType = isSelected ? null : t.$1;
+                  }),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? cs.primary.withOpacity(isDark ? 0.3 : 0.12)
+                          : (isDark
+                              ? Colors.white.withOpacity(0.05)
+                              : Colors.black.withOpacity(0.03)),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isSelected
+                            ? cs.primary.withOpacity(0.7)
+                            : (isDark
+                                ? Colors.white.withOpacity(0.1)
+                                : Colors.black.withOpacity(0.08)),
+                        width: isSelected ? 2 : 1.5,
+                      ),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(t.$2,
+                            style: TextStyle(
+                                fontSize: isSelected ? 22 : 20)),
+                        const SizedBox(height: 4),
+                        Text(
+                          t.$3,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: isSelected
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: isSelected
+                                ? cs.primary
+                                : cs.onSurface.withOpacity(0.6),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+        if (_selectedContentType == null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Leave blank to let us decide ✨',
+              style: TextStyle(
+                fontSize: 12,
+                color: cs.onSurface.withOpacity(0.45),
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildGlassCard(
+      {required bool isDark,
+      required ColorScheme cs,
+      required Widget child}) {
     return Container(
       decoration: BoxDecoration(
-        color: isDark 
-            ? kGlassDark.withOpacity(0.4) 
+        color: isDark
+            ? kGlassDark.withOpacity(0.4)
             : kGlassLight.withOpacity(0.6),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
-          color: isDark 
-              ? Colors.white.withOpacity(0.1) 
+          color: isDark
+              ? Colors.white.withOpacity(0.1)
               : Colors.white.withOpacity(0.5),
           width: 1.5,
         ),
@@ -769,7 +804,7 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             blurRadius: 24,
             spreadRadius: -8,
             offset: const Offset(0, 8),
-            color: isDark 
+            color: isDark
                 ? Colors.black.withOpacity(0.3)
                 : cs.primary.withOpacity(0.08),
           ),
@@ -780,160 +815,6 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
   }
 
   Widget _buildResultCard({required bool isDark, required ColorScheme cs}) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [
-                  kGlassDark.withOpacity(0.7),
-                  kGlassDark.withOpacity(0.5),
-                ]
-              : [
-                  kGlassLight.withOpacity(0.9),
-                  kGlassLight.withOpacity(0.7),
-                ],
-        ),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(
-          color: cs.primary.withOpacity(0.3),
-          width: 2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            blurRadius: 32,
-            spreadRadius: -4,
-            offset: const Offset(0, 12),
-            color: cs.primary.withOpacity(0.15),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [cs.primary, cs.secondary],
-                  ),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Icon(Icons.lightbulb_rounded, color: Colors.white, size: 20),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  'Your suggestion',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: cs.onSurface,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-
-          Text(
-            _suggestion!,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontSize: 15,
-              height: 1.5,
-              color: cs.onSurface.withOpacity(0.9),
-            ),
-          ),
-
-          if (_extractedLink != null) ...[
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              height: 44,
-              child: FilledButton.icon(
-                onPressed: _openLink,
-                style: FilledButton.styleFrom(
-                  backgroundColor: cs.tertiary,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                ),
-                icon: const Icon(Icons.open_in_new_rounded, size: 18),
-                label: const Text('Open link', style: TextStyle(fontSize: 14)),
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 20),
-          Divider(color: cs.outline.withOpacity(0.2), height: 1),
-          const SizedBox(height: 16),
-
-          ActionTimer(
-            initialSeconds: 60,
-            options: const [60, 120, 300],
-            onComplete: _onActionTimerComplete,
-          ),
-
-          const SizedBox(height: 20),
-
-          Row(
-            children: [
-              Expanded(
-                child: _buildCompactCheckOption(
-                  cs: cs,
-                  value: _shareWithFriends,
-                  label: 'Friends',
-                  icon: Icons.people_rounded,
-                  onChanged: (v) => setState(() => _shareWithFriends = v ?? true),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildCompactCheckOption(
-                  cs: cs,
-                  value: _shareWithProvider,
-                  label: 'Provider',
-                  icon: Icons.medical_services_rounded,
-                  onChanged: (v) => setState(() => _shareWithProvider = v ?? false),
-                ),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 16),
-
-          SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: FilledButton.icon(
-              onPressed: _saving ? null : _saveEntry,
-              style: FilledButton.styleFrom(
-                backgroundColor: cs.secondary,
-                foregroundColor: cs.onSecondary,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-              ),
-              icon: _saving
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Icon(Icons.bookmark_rounded, size: 20),
-              label: Text(
-                _saving ? 'Saving...' : 'Save this moment',
-                style: const TextStyle(fontSize: 15),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildContentTypeSelector({required ColorScheme cs, required bool isDark}) {
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -963,159 +844,109 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: [cs.primary, cs.secondary]),
+                  gradient:
+                      LinearGradient(colors: [cs.primary, cs.secondary]),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(Icons.tune_rounded, color: Colors.white, size: 20),
+                child: const Icon(Icons.auto_awesome_rounded,
+                    color: Colors.white, size: 20),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'What would you like to do?',
+                  'Here\'s what to do',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: cs.onSurface,
-                    fontWeight: FontWeight.w700,
-                  ),
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w700,
+                      ),
                 ),
               ),
             ],
           ),
+          const SizedBox(height: 16),
+          Text(
+            _suggestion!,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontSize: 15,
+                  height: 1.6,
+                  color: cs.onSurface.withOpacity(0.9),
+                ),
+          ),
+          if (_extractedLink != null) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 44,
+              child: FilledButton.icon(
+                onPressed: _openLink,
+                style: FilledButton.styleFrom(
+                  backgroundColor: cs.tertiary,
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                ),
+                icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                label: const Text('Open link',
+                    style: TextStyle(fontSize: 14)),
+              ),
+            ),
+          ],
           const SizedBox(height: 20),
-          
-          _buildContentTypeOption(
-            cs: cs,
-            isDark: isDark,
-            icon: Icons.music_note_rounded,
-            title: 'Listen to a Song',
-            description: 'Calming or uplifting music',
-            onTap: () {
-              setState(() => _selectedContentType = 'song');
-              _getSuggestion();
-            },
+          Divider(color: cs.outline.withOpacity(0.2), height: 1),
+          const SizedBox(height: 16),
+          ActionTimer(
+            initialSeconds: 60,
+            options: const [60, 120, 300],
+            onComplete: _onActionTimerComplete,
           ),
-          const SizedBox(height: 12),
-          
-          _buildContentTypeOption(
-            cs: cs,
-            isDark: isDark,
-            icon: Icons.podcasts_rounded,
-            title: 'Listen to a Podcast',
-            description: 'Short audio content',
-            onTap: () {
-              setState(() => _selectedContentType = 'podcast');
-              _getSuggestion();
-            },
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: _buildCompactCheckOption(
+                  cs: cs,
+                  value: _shareWithFriends,
+                  label: 'Friends',
+                  icon: Icons.people_rounded,
+                  onChanged: (v) =>
+                      setState(() => _shareWithFriends = v ?? true),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildCompactCheckOption(
+                  cs: cs,
+                  value: _shareWithProvider,
+                  label: 'Provider',
+                  icon: Icons.medical_services_rounded,
+                  onChanged: (v) =>
+                      setState(() => _shareWithProvider = v ?? false),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
-          
-          _buildContentTypeOption(
-            cs: cs,
-            isDark: isDark,
-            icon: Icons.play_circle_outline_rounded,
-            title: 'Watch a Video',
-            description: 'Guided meditation or relaxation',
-            onTap: () {
-              setState(() => _selectedContentType = 'video');
-              _getSuggestion();
-            },
-          ),
-          const SizedBox(height: 12),
-          
-          _buildContentTypeOption(
-            cs: cs,
-            isDark: isDark,
-            icon: Icons.self_improvement_rounded,
-            title: 'Do an Exercise',
-            description: 'Breathing or grounding technique',
-            onTap: () {
-              setState(() => _selectedContentType = 'exercise');
-              _getSuggestion();
-            },
-          ),
-          
           const SizedBox(height: 16),
           SizedBox(
             width: double.infinity,
-            child: TextButton(
-              onPressed: () {
-                setState(() {
-                  _showContentTypeSelector = false;
-                  _selectedContentType = null;
-                });
-              },
-              child: const Text('Cancel'),
+            height: 48,
+            child: FilledButton.icon(
+              onPressed: _saving ? null : _saveEntry,
+              style: FilledButton.styleFrom(
+                backgroundColor: cs.secondary,
+                foregroundColor: cs.onSecondary,
+              ),
+              icon: _saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.bookmark_rounded, size: 20),
+              label: Text(_saving ? 'Saving...' : 'Save this moment'),
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildContentTypeOption({
-    required ColorScheme cs,
-    required bool isDark,
-    required IconData icon,
-    required String title,
-    required String description,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isDark
-              ? Colors.white.withOpacity(0.05)
-              : Colors.black.withOpacity(0.03),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isDark
-                ? Colors.white.withOpacity(0.1)
-                : Colors.black.withOpacity(0.1),
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(colors: [cs.primary, cs.secondary]),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: Colors.white, size: 24),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: cs.onSurface,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    description,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: cs.onSurface.withOpacity(0.6),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.arrow_forward_rounded,
-              color: cs.onSurface.withOpacity(0.3),
-              size: 20,
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1130,7 +961,8 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
     return InkWell(
       onTap: () => onChanged(!value),
       borderRadius: BorderRadius.circular(16),
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: value
@@ -1147,11 +979,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              size: 18,
-              color: value ? cs.primary : cs.onSurfaceVariant,
-            ),
+            Icon(icon,
+                size: 18,
+                color: value ? cs.primary : cs.onSurfaceVariant),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -1168,7 +998,9 @@ class _SuggestionScreenState extends State<SuggestionScreen> with SingleTickerPr
             Icon(
               value ? Icons.check_circle : Icons.circle_outlined,
               size: 16,
-              color: value ? cs.primary : cs.onSurfaceVariant.withOpacity(0.5),
+              color: value
+                  ? cs.primary
+                  : cs.onSurfaceVariant.withOpacity(0.5),
             ),
           ],
         ),
