@@ -49,6 +49,7 @@ Future<void> main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
   runApp(const FeelBetterApp());
 }
 
@@ -185,183 +186,27 @@ class FeelBetterApp extends StatelessWidget {
           labelStyle: const TextStyle(fontWeight: FontWeight.w600),
         ),
       ),
+      // NEW: Use StreamBuilder to check auth state
       home: StreamBuilder<User?>(
         stream: FirebaseAuth.instance.authStateChanges(),
         builder: (context, snapshot) {
+          // Show loading while checking auth state
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
+              body: Center(
+                child: CircularProgressIndicator(),
+              ),
             );
           }
+          
+          // If user is logged in, show main app
           if (snapshot.hasData && snapshot.data != null) {
-            return const AppShell();
+            return const SuggestionScreen();
           }
+          
+          // Otherwise show login screen
           return const AuthScreen();
         },
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// APP SHELL — 4-tab bottom navigation
-// ============================================================================
-
-class AppShell extends StatefulWidget {
-  const AppShell({super.key});
-
-  @override
-  State<AppShell> createState() => _AppShellState();
-}
-
-class _AppShellState extends State<AppShell> {
-  int _currentIndex = 0;
-
-  // IndexedStack keeps all screens alive so state is never lost on tab switch
-  static const List<Widget> _screens = [
-    SuggestionScreen(),   // 0 — Home
-    FriendsScreen(),      // 1 — Friends
-    ChallengesScreen(),   // 2 — Challenges (NEW)
-    ProfileScreen(),      // 3 — Profile
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Scaffold(
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: isDark
-              ? kGlassDark.withOpacity(0.95)
-              : kGlassLight.withOpacity(0.95),
-          border: Border(
-            top: BorderSide(
-              color: isDark
-                  ? Colors.white.withOpacity(0.08)
-                  : Colors.black.withOpacity(0.07),
-              width: 1,
-            ),
-          ),
-          boxShadow: [
-            BoxShadow(
-              blurRadius: 24,
-              spreadRadius: -4,
-              offset: const Offset(0, -8),
-              color: isDark
-                  ? Colors.black.withOpacity(0.4)
-                  : cs.primary.withOpacity(0.08),
-            ),
-          ],
-        ),
-        child: SafeArea(
-          top: false,
-          child: SizedBox(
-            height: 64,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _NavItem(
-                  icon: Icons.spa_outlined,
-                  activeIcon: Icons.spa_rounded,
-                  label: 'Home',
-                  isActive: _currentIndex == 0,
-                  onTap: () => setState(() => _currentIndex = 0),
-                  cs: cs,
-                ),
-                _NavItem(
-                  icon: Icons.people_outline_rounded,
-                  activeIcon: Icons.people_rounded,
-                  label: 'Friends',
-                  isActive: _currentIndex == 1,
-                  onTap: () => setState(() => _currentIndex = 1),
-                  cs: cs,
-                ),
-                _NavItem(
-                  icon: Icons.emoji_events_outlined,
-                  activeIcon: Icons.emoji_events_rounded,
-                  label: 'Challenges',
-                  isActive: _currentIndex == 2,
-                  onTap: () => setState(() => _currentIndex = 2),
-                  cs: cs,
-                ),
-                _NavItem(
-                  icon: Icons.person_outline_rounded,
-                  activeIcon: Icons.person_rounded,
-                  label: 'Profile',
-                  isActive: _currentIndex == 3,
-                  onTap: () => setState(() => _currentIndex = 3),
-                  cs: cs,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// Individual nav bar item
-class _NavItem extends StatelessWidget {
-  const _NavItem({
-    required this.icon,
-    required this.activeIcon,
-    required this.label,
-    required this.isActive,
-    required this.onTap,
-    required this.cs,
-  });
-
-  final IconData icon;
-  final IconData activeIcon;
-  final String label;
-  final bool isActive;
-  final VoidCallback onTap;
-  final ColorScheme cs;
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                child: Icon(
-                  isActive ? activeIcon : icon,
-                  key: ValueKey(isActive),
-                  color: isActive
-                      ? cs.primary
-                      : cs.onSurface.withOpacity(0.4),
-                  size: 24,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                  color: isActive
-                      ? cs.primary
-                      : cs.onSurface.withOpacity(0.4),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
