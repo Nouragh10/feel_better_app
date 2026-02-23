@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -12,9 +13,11 @@ import 'package:url_launcher/url_launcher.dart';
 import 'firebase_options.dart';
 import 'services/openai_service.dart';
 import 'services/firestore_service.dart';
+import 'services/mood_pattern_service.dart';
 
 import 'screens/friends_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/challenges_screen.dart'; // NEW
 import 'screens/settings_screen.dart' show ghostMode;
 import 'screens/auth_screen.dart';
 
@@ -117,7 +120,8 @@ class FeelBetterApp extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             elevation: 0,
-            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+            textStyle: const TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.3),
           ),
         ),
         chipTheme: ChipThemeData(
@@ -171,7 +175,8 @@ class FeelBetterApp extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             elevation: 0,
-            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+            textStyle: const TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w700, letterSpacing: 0.3),
           ),
         ),
         chipTheme: ChipThemeData(
@@ -189,9 +194,9 @@ class FeelBetterApp extends StatelessWidget {
             );
           }
           if (snapshot.hasData && snapshot.data != null) {
-            return const MainShell();
+            return const AppShell();
           }
-          return AuthScreen();
+          return const AuthScreen();
         },
       ),
     );
@@ -199,30 +204,25 @@ class FeelBetterApp extends StatelessWidget {
 }
 
 // ============================================================================
-// MAIN SHELL WITH BOTTOM NAVIGATION
+// APP SHELL — 4-tab bottom navigation
 // ============================================================================
 
-class MainShell extends StatefulWidget {
-  const MainShell({super.key, this.initialIndex = 0});
-  final int initialIndex;
+class AppShell extends StatefulWidget {
+  const AppShell({super.key});
 
   @override
-  State<MainShell> createState() => _MainShellState();
+  State<AppShell> createState() => _AppShellState();
 }
 
-class _MainShellState extends State<MainShell> {
-  late int _currentIndex;
+class _AppShellState extends State<AppShell> {
+  int _currentIndex = 0;
 
-  @override
-  void initState() {
-    super.initState();
-    _currentIndex = widget.initialIndex;
-  }
-
-  static const _screens = [
-    SuggestionScreen(),
-    FriendsScreen(),
-    ProfileScreen(),
+  // IndexedStack keeps all screens alive so state is never lost on tab switch
+  static const List<Widget> _screens = [
+    SuggestionScreen(),   // 0 — Home
+    FriendsScreen(),      // 1 — Friends
+    ChallengesScreen(),   // 2 — Challenges (NEW)
+    ProfileScreen(),      // 3 — Profile
   ];
 
   @override
@@ -238,58 +238,64 @@ class _MainShellState extends State<MainShell> {
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: isDark
-              ? kBgDarkMid.withOpacity(0.95)
+              ? kGlassDark.withOpacity(0.95)
               : kGlassLight.withOpacity(0.95),
           border: Border(
             top: BorderSide(
               color: isDark
                   ? Colors.white.withOpacity(0.08)
-                  : Colors.black.withOpacity(0.06),
+                  : Colors.black.withOpacity(0.07),
               width: 1,
             ),
           ),
           boxShadow: [
             BoxShadow(
+              blurRadius: 24,
+              spreadRadius: -4,
+              offset: const Offset(0, -8),
               color: isDark
-                  ? Colors.black.withOpacity(0.3)
-                  : cs.primary.withOpacity(0.06),
-              blurRadius: 20,
-              offset: const Offset(0, -4),
+                  ? Colors.black.withOpacity(0.4)
+                  : cs.primary.withOpacity(0.08),
             ),
           ],
         ),
         child: SafeArea(
           top: false,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: SizedBox(
+            height: 64,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceAround,
               children: [
                 _NavItem(
-                  icon: Icons.spa_rounded,
+                  icon: Icons.spa_outlined,
                   activeIcon: Icons.spa_rounded,
-                  label: 'Nearby',
-                  index: 0,
-                  currentIndex: _currentIndex,
-                  onTap: (i) => setState(() => _currentIndex = i),
+                  label: 'Home',
+                  isActive: _currentIndex == 0,
+                  onTap: () => setState(() => _currentIndex = 0),
                   cs: cs,
                 ),
                 _NavItem(
                   icon: Icons.people_outline_rounded,
                   activeIcon: Icons.people_rounded,
                   label: 'Friends',
-                  index: 1,
-                  currentIndex: _currentIndex,
-                  onTap: (i) => setState(() => _currentIndex = i),
+                  isActive: _currentIndex == 1,
+                  onTap: () => setState(() => _currentIndex = 1),
                   cs: cs,
                 ),
                 _NavItem(
-                  icon: Icons.account_circle_outlined,
-                  activeIcon: Icons.account_circle_rounded,
+                  icon: Icons.emoji_events_outlined,
+                  activeIcon: Icons.emoji_events_rounded,
+                  label: 'Challenges',
+                  isActive: _currentIndex == 2,
+                  onTap: () => setState(() => _currentIndex = 2),
+                  cs: cs,
+                ),
+                _NavItem(
+                  icon: Icons.person_outline_rounded,
+                  activeIcon: Icons.person_rounded,
                   label: 'Profile',
-                  index: 2,
-                  currentIndex: _currentIndex,
-                  onTap: (i) => setState(() => _currentIndex = i),
+                  isActive: _currentIndex == 3,
+                  onTap: () => setState(() => _currentIndex = 3),
                   cs: cs,
                 ),
               ],
@@ -301,13 +307,13 @@ class _MainShellState extends State<MainShell> {
   }
 }
 
+// Individual nav bar item
 class _NavItem extends StatelessWidget {
   const _NavItem({
     required this.icon,
     required this.activeIcon,
     required this.label,
-    required this.index,
-    required this.currentIndex,
+    required this.isActive,
     required this.onTap,
     required this.cs,
   });
@@ -315,26 +321,19 @@ class _NavItem extends StatelessWidget {
   final IconData icon;
   final IconData activeIcon;
   final String label;
-  final int index;
-  final int currentIndex;
-  final ValueChanged<int> onTap;
+  final bool isActive;
+  final VoidCallback onTap;
   final ColorScheme cs;
 
   @override
   Widget build(BuildContext context) {
-    final isActive = currentIndex == index;
-
     return Expanded(
       child: GestureDetector(
-        onTap: () => onTap(index),
+        onTap: onTap,
         behavior: HitTestBehavior.opaque,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
+          duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: isActive ? cs.primary.withOpacity(0.1) : Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
-          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -343,19 +342,22 @@ class _NavItem extends StatelessWidget {
                 child: Icon(
                   isActive ? activeIcon : icon,
                   key: ValueKey(isActive),
-                  color: isActive ? cs.primary : cs.onSurface.withOpacity(0.45),
-                  size: 26,
+                  color: isActive
+                      ? cs.primary
+                      : cs.onSurface.withOpacity(0.4),
+                  size: 24,
                 ),
               ),
               const SizedBox(height: 4),
-              AnimatedDefaultTextStyle(
-                duration: const Duration(milliseconds: 200),
+              Text(
+                label,
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                  color: isActive ? cs.primary : cs.onSurface.withOpacity(0.45),
+                  color: isActive
+                      ? cs.primary
+                      : cs.onSurface.withOpacity(0.4),
                 ),
-                child: Text(label),
               ),
             ],
           ),
@@ -379,6 +381,7 @@ class SuggestionScreen extends StatefulWidget {
 class _SuggestionScreenState extends State<SuggestionScreen>
     with SingleTickerProviderStateMixin {
   final _fs = FirestoreService();
+  final _moodPatternService = MoodPatternService();
 
   // State
   String _mood = '';
@@ -390,11 +393,14 @@ class _SuggestionScreenState extends State<SuggestionScreen>
   bool _shareWithFriends = true;
   bool _shareWithProvider = false;
 
-  // Content type selection (now visible upfront)
+  // Content type selection (visible upfront)
   String? _selectedContentType;
 
   // Variation index
   int _suggestionIndex = 0;
+
+  // Cached mood insight
+  MoodInsight _moodInsight = const MoodInsight();
 
   // Animation
   late AnimationController _fadeController;
@@ -411,12 +417,22 @@ class _SuggestionScreenState extends State<SuggestionScreen>
       parent: _fadeController,
       curve: Curves.easeInOut,
     );
+    _prefetchMoodInsight();
   }
 
   @override
   void dispose() {
     _fadeController.dispose();
     super.dispose();
+  }
+
+  Future<void> _prefetchMoodInsight() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final insight = await _moodPatternService.getInsight(uid);
+      if (mounted) setState(() => _moodInsight = insight);
+    } catch (_) {}
   }
 
   // ---- Helpers ----
@@ -469,7 +485,6 @@ class _SuggestionScreenState extends State<SuggestionScreen>
 
     final items = _parseItems(_items);
 
-    // Crisis check
     final crisisCheck = OpenAIService.detectCrisis(mood: _mood, items: items);
     if (crisisCheck.isCrisis) {
       await CrisisAlertDialog.show(
@@ -487,14 +502,29 @@ class _SuggestionScreenState extends State<SuggestionScreen>
 
     try {
       Map<String, String>? prefs;
+      MoodInsight insight = _moodInsight;
+
       final uid = FirebaseAuth.instance.currentUser?.uid;
       if (uid != null) {
         try {
-          final snap = await _fs.getUser(uid);
-          final data = snap.data();
-          prefs = (data?['personalPreferences'] as Map<String, dynamic>?)?.map(
-            (key, value) => MapEntry(key, value.toString()),
-          );
+          if (!insight.hasData) {
+            final results = await Future.wait([
+              _fs.getUser(uid),
+              _moodPatternService.getInsight(uid),
+            ]);
+            final snap = results[0] as DocumentSnapshot<Map<String, dynamic>>;
+            insight = results[1] as MoodInsight;
+            if (mounted) setState(() => _moodInsight = insight);
+
+            final data = snap.data();
+            prefs = (data?['personalPreferences'] as Map<String, dynamic>?)
+                ?.map((key, value) => MapEntry(key, value.toString()));
+          } else {
+            final snap = await _fs.getUser(uid);
+            final data = snap.data();
+            prefs = (data?['personalPreferences'] as Map<String, dynamic>?)
+                ?.map((key, value) => MapEntry(key, value.toString()));
+          }
         } catch (_) {}
       }
 
@@ -506,6 +536,7 @@ class _SuggestionScreenState extends State<SuggestionScreen>
         userPreferences: prefs,
         contentType: _selectedContentType,
         variationIndex: _suggestionIndex,
+        moodInsight: insight,
       );
 
       if (!mounted) return;
@@ -576,7 +607,8 @@ class _SuggestionScreenState extends State<SuggestionScreen>
         suggestion: _suggestion!.trim(),
         shareWithFriends: _shareWithFriends,
         shareWithProviders: _shareWithProvider,
-        publicSummary: 'felt $_mood and was recommended: ${_suggestion!.trim()}',
+        publicSummary:
+            'felt $_mood and was recommended: ${_suggestion!.trim()}',
         createdAtLocal: DateTime.now(),
       );
 
@@ -599,6 +631,8 @@ class _SuggestionScreenState extends State<SuggestionScreen>
           );
         } catch (_) {}
       }
+
+      _prefetchMoodInsight();
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -631,7 +665,6 @@ class _SuggestionScreenState extends State<SuggestionScreen>
     try {
       await _fs.updateUserDailyStreakOnActionComplete(uid: uid);
       if (!mounted) return;
-      // Trigger confetti on action complete
       ConfettiOverlay.show(context);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -659,8 +692,7 @@ class _SuggestionScreenState extends State<SuggestionScreen>
             Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                gradient:
-                    LinearGradient(colors: [cs.primary, cs.secondary]),
+                gradient: LinearGradient(colors: [cs.primary, cs.secondary]),
                 borderRadius: BorderRadius.circular(10),
               ),
               child:
@@ -671,7 +703,6 @@ class _SuggestionScreenState extends State<SuggestionScreen>
           ],
         ),
         actions: [
-          // Ghost mode moved to a subtle icon
           ValueListenableBuilder<bool>(
             valueListenable: ghostMode,
             builder: (_, isOn, __) => IconButton(
@@ -713,6 +744,12 @@ class _SuggestionScreenState extends State<SuggestionScreen>
                     const DailyExerciseCard(),
                     const SizedBox(height: 28),
 
+                    // Mood insight banner
+                    if (_moodInsight.hasData && _suggestion == null)
+                      _buildInsightBanner(isDark: isDark, cs: cs),
+                    if (_moodInsight.hasData && _suggestion == null)
+                      const SizedBox(height: 16),
+
                     // ---- Mood chips ----
                     _buildGlassCard(
                       isDark: isDark,
@@ -744,14 +781,15 @@ class _SuggestionScreenState extends State<SuggestionScreen>
 
                     const SizedBox(height: 20),
 
-                    // ---- Content type picker (always visible) ----
+                    // ---- Content type picker ----
                     if (_suggestion == null)
                       _buildGlassCard(
                         isDark: isDark,
                         cs: cs,
                         child: Padding(
                           padding: const EdgeInsets.all(20),
-                          child: _buildContentTypePicker(cs: cs, isDark: isDark),
+                          child: _buildContentTypePicker(
+                              cs: cs, isDark: isDark),
                         ),
                       ),
 
@@ -805,7 +843,8 @@ class _SuggestionScreenState extends State<SuggestionScreen>
                                       onPressed: _startOver,
                                       style: OutlinedButton.styleFrom(
                                         side: BorderSide(
-                                            color: cs.outline.withOpacity(0.5)),
+                                            color:
+                                                cs.outline.withOpacity(0.5)),
                                         foregroundColor: cs.onSurface,
                                       ),
                                       icon: const Icon(Icons.refresh_rounded,
@@ -824,7 +863,8 @@ class _SuggestionScreenState extends State<SuggestionScreen>
                                         backgroundColor: cs.primary,
                                         foregroundColor: cs.onPrimary,
                                       ),
-                                      icon: const Icon(Icons.auto_awesome_rounded,
+                                      icon: const Icon(
+                                          Icons.auto_awesome_rounded,
                                           size: 20),
                                       label: const Text('Try another'),
                                     ),
@@ -849,6 +889,57 @@ class _SuggestionScreenState extends State<SuggestionScreen>
   // UI HELPERS
   // ============================================================================
 
+  Widget _buildInsightBanner({required bool isDark, required ColorScheme cs}) {
+    final trend = _moodInsight.moodTrend;
+    final dominant = _moodInsight.dominantMood;
+    if (trend == 'unknown' && dominant == null) return const SizedBox.shrink();
+
+    String message;
+    IconData icon;
+    Color color;
+
+    if (trend == 'improving') {
+      message = 'Your mood has been improving lately 🌱';
+      icon = Icons.trending_up_rounded;
+      color = const Color(0xFF10B981);
+    } else if (trend == 'declining') {
+      message = 'Looks like it\'s been a tough stretch. We\'ve got you 💙';
+      icon = Icons.favorite_rounded;
+      color = kAccentCoral;
+    } else if (dominant != null) {
+      message = 'You\'ve been feeling $dominant a lot recently.';
+      icon = Icons.insights_rounded;
+      color = cs.primary;
+    } else {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(isDark ? 0.15 : 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withOpacity(0.3), width: 1.5),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildContentTypePicker(
       {required ColorScheme cs, required bool isDark}) {
     const types = [
@@ -857,6 +948,14 @@ class _SuggestionScreenState extends State<SuggestionScreen>
       ('video', '📹', 'Video'),
       ('exercise', '🧘', 'Exercise'),
     ];
+
+    final smartType = _mood.isNotEmpty
+        ? MoodPatternService.recommendContentType(
+            mood: _mood,
+            insight: _moodInsight,
+            items: _parseItems(_items),
+          )
+        : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -872,6 +971,9 @@ class _SuggestionScreenState extends State<SuggestionScreen>
         Row(
           children: types.map((t) {
             final isSelected = _selectedContentType == t.$1;
+            final isRecommended = _selectedContentType == null &&
+                smartType == t.$1 &&
+                _mood.isNotEmpty;
             return Expanded(
               child: Padding(
                 padding: const EdgeInsets.only(right: 8),
@@ -885,16 +987,20 @@ class _SuggestionScreenState extends State<SuggestionScreen>
                     decoration: BoxDecoration(
                       color: isSelected
                           ? cs.primary.withOpacity(isDark ? 0.3 : 0.12)
-                          : (isDark
-                              ? Colors.white.withOpacity(0.05)
-                              : Colors.black.withOpacity(0.03)),
+                          : isRecommended
+                              ? cs.secondary.withOpacity(isDark ? 0.2 : 0.08)
+                              : (isDark
+                                  ? Colors.white.withOpacity(0.05)
+                                  : Colors.black.withOpacity(0.03)),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(
                         color: isSelected
                             ? cs.primary.withOpacity(0.7)
-                            : (isDark
-                                ? Colors.white.withOpacity(0.1)
-                                : Colors.black.withOpacity(0.08)),
+                            : isRecommended
+                                ? cs.secondary.withOpacity(0.5)
+                                : (isDark
+                                    ? Colors.white.withOpacity(0.1)
+                                    : Colors.black.withOpacity(0.08)),
                         width: isSelected ? 2 : 1.5,
                       ),
                     ),
@@ -902,8 +1008,8 @@ class _SuggestionScreenState extends State<SuggestionScreen>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(t.$2,
-                            style: TextStyle(
-                                fontSize: isSelected ? 22 : 20)),
+                            style:
+                                TextStyle(fontSize: isSelected ? 22 : 20)),
                         const SizedBox(height: 4),
                         Text(
                           t.$3,
@@ -914,9 +1020,23 @@ class _SuggestionScreenState extends State<SuggestionScreen>
                                 : FontWeight.w500,
                             color: isSelected
                                 ? cs.primary
-                                : cs.onSurface.withOpacity(0.6),
+                                : isRecommended
+                                    ? cs.secondary
+                                    : cs.onSurface.withOpacity(0.6),
                           ),
                         ),
+                        if (isRecommended)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 3),
+                            child: Text(
+                              '✦ for you',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: cs.secondary,
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -929,7 +1049,9 @@ class _SuggestionScreenState extends State<SuggestionScreen>
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
-              'Leave blank to let us decide ✨',
+              _mood.isNotEmpty
+                  ? 'We\'ll pick the best type for you ✨'
+                  : 'Leave blank to let us decide ✨',
               style: TextStyle(
                 fontSize: 12,
                 color: cs.onSurface.withOpacity(0.45),
@@ -1011,12 +1133,30 @@ class _SuggestionScreenState extends State<SuggestionScreen>
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  'Here\'s what to do',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: cs.onSurface,
-                        fontWeight: FontWeight.w700,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Here\'s what to do',
+                      style:
+                          Theme.of(context).textTheme.titleMedium?.copyWith(
+                                color: cs.onSurface,
+                                fontWeight: FontWeight.w700,
+                              ),
+                    ),
+                    if (_moodInsight.hasData)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          'personalised for you',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: cs.secondary.withOpacity(0.8),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ),
+                  ],
                 ),
               ),
             ],
@@ -1040,8 +1180,8 @@ class _SuggestionScreenState extends State<SuggestionScreen>
                 style: FilledButton.styleFrom(
                   backgroundColor: cs.tertiary,
                   foregroundColor: Colors.white,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 20, vertical: 10),
                 ),
                 icon: const Icon(Icons.open_in_new_rounded, size: 18),
                 label: const Text('Open link',
