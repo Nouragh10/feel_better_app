@@ -150,6 +150,42 @@ class FirestoreService {
     return q.docs.map((d) => d.id).toList();
   }
 
+  /// Returns a stream of this user's accepted friends with basic profile info.
+  ///
+  /// Each item in the emitted list has:
+  /// - `uid`
+  /// - `username` (may be null)
+  /// - `displayName` (may be null)
+  Stream<List<Map<String, dynamic>>> getFriends(String uid) {
+    return _db
+        .collection('friendships')
+        .doc(uid)
+        .collection('friends')
+        .where('status', isEqualTo: 'accepted')
+        .orderBy('updatedAt', descending: true)
+        .snapshots()
+        .asyncMap((snap) async {
+      final List<Map<String, dynamic>> friends = [];
+
+      for (final doc in snap.docs) {
+        final friendUid = doc.id;
+        try {
+          final userSnap = await _db.collection('users').doc(friendUid).get();
+          final data = userSnap.data() ?? <String, dynamic>{};
+          friends.add({
+            'uid': friendUid,
+            'username': data['username'],
+            'displayName': data['displayName'],
+          });
+        } catch (_) {
+          // Ignore individual failures and continue building the list.
+        }
+      }
+
+      return friends;
+    });
+  }
+
   // ----------------------------- ENTRIES ---------------------------
 
   Future<String> addEntry({
